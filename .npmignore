@@ -1,0 +1,21 @@
+# Source files (dist is published)
+src/
+
+# Development
+.github/
+demo/
+node_modules/
+coverage/
+
+# Config files
+.gitignore
+.eslintrc*
+.prettierrc*
+tsconfig.json
+rollup.config.js
+vitest.config.ts
+
+# Misc
+*.log
+.DS_Store
+CONTRIBUTING.md
