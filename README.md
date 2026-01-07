@@ -1,11 +1,11 @@
 <div align="center">
-  <img src="https://raw.githubusercontent.com/tkana731/social-masonry/main/assets/logo.svg" alt="Social Masonry" width="120" />
+  <img src="https://raw.githubusercontent.com/tkana-dev/social-masonry/main/assets/logo.svg" alt="Social Masonry" width="120" />
   <h1>Social Masonry</h1>
   <p><strong>Beautiful masonry layout for X (Twitter) and Instagram embeds</strong></p>
   
   [![npm version](https://img.shields.io/npm/v/social-masonry.svg)](https://www.npmjs.com/package/social-masonry)
   [![bundle size](https://img.shields.io/bundlephobia/minzip/social-masonry)](https://bundlephobia.com/package/social-masonry)
-  [![license](https://img.shields.io/npm/l/social-masonry.svg)](https://github.com/tkana731/social-masonry/blob/main/LICENSE)
+  [![license](https://img.shields.io/npm/l/social-masonry.svg)](https://github.com/tkana-dev/social-masonry/blob/main/LICENSE)
   [![TypeScript](https://img.shields.io/badge/TypeScript-Ready-blue.svg)](https://www.typescriptlang.org/)
   
   <a href="https://social-masonry.dev">Demo</a> · <a href="#installation">Installation</a> · <a href="#usage">Usage</a> · <a href="#api">API</a>
@@ -14,7 +14,7 @@
 ---
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/tkana731/social-masonry/main/assets/demo.gif" alt="Demo" width="100%" />
+  <img src="https://raw.githubusercontent.com/tkana-dev/social-masonry/main/assets/demo.gif" alt="Demo" width="100%" />
 </p>
 
 ## ✨ Features
@@ -384,11 +384,11 @@ createSocialMasonry({
 
 ## 📄 License
 
-MIT © [tkana_dev](https://github.com/tkana731)
+MIT © [tkana_dev](https://github.com/tkana-dev)
 
 ---
 
 <div align="center">
   <p>If you find this project useful, please consider giving it a ⭐️</p>
-  <a href="https://github.com/tkana731/social-masonry">GitHub</a> · <a href="https://www.npmjs.com/package/social-masonry">npm</a> · <a href="https://social-masonry.dev">Demo</a>
+  <a href="https://github.com/tkana-dev/social-masonry">GitHub</a> · <a href="https://www.npmjs.com/package/social-masonry">npm</a> · <a href="https://social-masonry.dev">Demo</a>
 </div>

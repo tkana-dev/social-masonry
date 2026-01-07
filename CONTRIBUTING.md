@@ -6,7 +6,7 @@ Thank you for your interest in contributing! 🎉
 
 ```bash
 # Clone the repo
-git clone https://github.com/tkana731/social-masonry.git
+git clone https://github.com/tkana-dev/social-masonry.git
 cd social-masonry
 
 # Install dependencies

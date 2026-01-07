@@ -48,11 +48,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/tkana731/social-masonry"
+    "url": "https://github.com/tkana-dev/social-masonry"
   },
   "homepage": "https://social-masonry.dev",
   "bugs": {
-    "url": "https://github.com/tkana731/social-masonry/issues"
+    "url": "https://github.com/tkana-dev/social-masonry/issues"
   },
   "peerDependencies": {
     "react": ">=17.0.0",
