@@ -44,13 +44,13 @@
     "virtualization",
     "infinite-scroll"
   ],
-  "author": "",
+  "author": "tkana",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/tkana-dev/social-masonry"
   },
-  "homepage": "https://social-masonry.dev",
+  "homepage": "https://tkana.dev/social-masonry/",
   "bugs": {
     "url": "https://github.com/tkana-dev/social-masonry/issues"
   },
