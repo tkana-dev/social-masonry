@@ -7,6 +7,7 @@ describe('isTwitterPost', () => {
     const post: TwitterPost = {
       id: '1',
       platform: 'twitter',
+      url: 'https://twitter.com/test/status/1',
       author: { username: 'test', displayName: 'Test' },
       content: { text: 'Hello' },
       createdAt: new Date().toISOString(),
@@ -18,8 +19,10 @@ describe('isTwitterPost', () => {
     const post: InstagramPost = {
       id: '1',
       platform: 'instagram',
+      url: 'https://instagram.com/p/test1',
       author: { username: 'test' },
       content: {},
+      media: { type: 'image', url: 'https://example.com/image.jpg' },
       createdAt: new Date().toISOString(),
     };
     expect(isTwitterPost(post)).toBe(false);
@@ -31,8 +34,10 @@ describe('isInstagramPost', () => {
     const post: InstagramPost = {
       id: '1',
       platform: 'instagram',
+      url: 'https://instagram.com/p/test1',
       author: { username: 'test' },
       content: {},
+      media: { type: 'image', url: 'https://example.com/image.jpg' },
       createdAt: new Date().toISOString(),
     };
     expect(isInstagramPost(post)).toBe(true);
@@ -42,6 +47,7 @@ describe('isInstagramPost', () => {
     const post: TwitterPost = {
       id: '1',
       platform: 'twitter',
+      url: 'https://twitter.com/test/status/1',
       author: { username: 'test', displayName: 'Test' },
       content: { text: 'Hello' },
       createdAt: new Date().toISOString(),
