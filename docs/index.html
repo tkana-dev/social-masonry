@@ -9,6 +9,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { overflow-x: hidden; width: 100%; }
     :root {
       --bg-primary: #0a0a0b;
       --bg-secondary: #111113;
@@ -23,8 +24,8 @@
     html { scroll-behavior: smooth; }
     body { font-family: 'Inter', sans-serif; background: var(--bg-primary); color: var(--text-primary); line-height: 1.6; }
 
-    .hero { min-height: 100vh; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; padding: 2rem; position: relative; }
-    .hero::before { content: ''; position: absolute; top: 0; left: 50%; transform: translateX(-50%); width: 800px; height: 800px; background: radial-gradient(circle, rgba(59, 130, 246, 0.15) 0%, transparent 70%); pointer-events: none; }
+    .hero { min-height: 100vh; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; padding: 2rem; position: relative; overflow: hidden; }
+    .hero::before { content: ''; position: absolute; top: 0; left: 50%; transform: translateX(-50%); width: min(800px, 200vw); height: min(800px, 200vw); background: radial-gradient(circle, rgba(59, 130, 246, 0.15) 0%, transparent 70%); pointer-events: none; }
     .hero-content { position: relative; z-index: 1; max-width: 800px; }
     .badge { display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.5rem 1rem; background: var(--bg-card); border: 1px solid var(--border); border-radius: 9999px; font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 1.5rem; }
     .badge-dot { width: 8px; height: 8px; background: #22c55e; border-radius: 50%; animation: pulse 2s infinite; }
@@ -68,25 +69,34 @@
       justify-content: center;
       gap: 16px;
       width: 100%;
+      flex-wrap: wrap;
     }
     .masonry-column {
       display: flex;
       flex-direction: column;
       gap: 16px;
-    }
-    .masonry-container[data-columns="2"] .masonry-column {
-      width: 550px;
-    }
-    .masonry-container[data-columns="3"] .masonry-column {
-      width: 400px;
-    }
-    .masonry-container[data-columns="4"] .masonry-column {
-      width: 330px;
+      flex: 1 1 300px;
+      min-width: 280px;
+      max-width: 550px;
     }
     /* Instagram embed constraints */
     .instagram-media {
-      min-width: 300px !important;
+      min-width: 280px !important;
       max-width: 100% !important;
+    }
+    /* Responsive adjustments */
+    @media (max-width: 1200px) {
+      .masonry-column { max-width: 450px; }
+    }
+    @media (max-width: 900px) {
+      .masonry-column { max-width: 400px; }
+    }
+    @media (max-width: 640px) {
+      .demo { padding: 4rem 1rem; }
+      .masonry-container { flex-direction: column; align-items: center; }
+      .masonry-column { flex: 1 1 auto; min-width: 0; max-width: 550px; width: 100%; }
+      .masonry-column .embed-wrapper { display: flex; justify-content: center; }
+      .demo-controls .control-group:first-child { display: none; }
     }
     .embed-loading {
       display: flex;
@@ -155,8 +165,9 @@
       <div class="demo-controls">
         <div class="control-group">
           <span style="color: var(--text-muted); padding: 0 0.5rem; font-size: 0.875rem;">Columns:</span>
+          <button class="control-btn" data-columns="1">1</button>
           <button class="control-btn" data-columns="2">2</button>
-          <button class="control-btn active" data-columns="3">3</button>
+          <button class="control-btn" data-columns="3">3</button>
           <button class="control-btn" data-columns="4">4</button>
         </div>
         <div class="control-group">
@@ -234,6 +245,27 @@
 
     let currentColumns = 3;
     let currentTheme = 'dark';
+    let autoResponsive = true;
+
+    // Responsive column breakpoints
+    function getResponsiveColumns() {
+      const width = window.innerWidth;
+      if (width >= 1280) return 4;
+      if (width >= 900) return 3;
+      if (width >= 640) return 2;
+      return 1;
+    }
+
+    // Check if mobile view (force single column)
+    function isMobileView() {
+      return window.innerWidth < 640;
+    }
+
+    function updateColumnsUI(columns) {
+      document.querySelectorAll('[data-columns]').forEach(btn => {
+        btn.classList.toggle('active', parseInt(btn.dataset.columns) === columns);
+      });
+    }
 
     function extractTweetId(url) {
       const match = url.match(/(?:twitter\.com|x\.com)\/\w+\/status\/(\d+)/);
@@ -256,9 +288,10 @@
     function render() {
       const container = document.getElementById('masonry');
       container.innerHTML = '';
-      container.dataset.columns = currentColumns;
 
-      const columns = distributeToColumns(posts, currentColumns);
+      // Force single column on mobile
+      const effectiveColumns = isMobileView() ? 1 : currentColumns;
+      const columns = distributeToColumns(posts, effectiveColumns);
 
       columns.forEach((columnPosts, colIndex) => {
         const columnDiv = document.createElement('div');
@@ -274,13 +307,13 @@
               // Calculate column width for proper sizing
               const containerWidth = document.getElementById('masonry').clientWidth;
               const gap = 16;
-              const columnWidth = Math.floor((containerWidth - gap * (currentColumns - 1)) / currentColumns);
+              const columnWidth = Math.floor((containerWidth - gap * (effectiveColumns - 1)) / effectiveColumns);
 
               window.twttr.widgets.createTweet(tweetId, wrapper, {
                 theme: currentTheme,
                 conversation: 'none',
                 dnt: true,
-                width: columnWidth,
+                width: Math.min(columnWidth, 550),
               });
             }
           } else if (post.platform === 'instagram') {
@@ -322,17 +355,41 @@
     }
 
     // Wait for Twitter widget to load
+    function initDemo() {
+      if (autoResponsive) {
+        currentColumns = getResponsiveColumns();
+        updateColumnsUI(currentColumns);
+      }
+      render();
+    }
+
     if (window.twttr) {
-      window.twttr.ready(() => render());
+      window.twttr.ready(() => initDemo());
     } else {
       window.addEventListener('load', () => {
-        setTimeout(render, 1000);
+        setTimeout(initDemo, 1000);
       });
     }
+
+    // Responsive resize handler with debounce
+    let resizeTimeout;
+    window.addEventListener('resize', () => {
+      if (!autoResponsive) return;
+      clearTimeout(resizeTimeout);
+      resizeTimeout = setTimeout(() => {
+        const newColumns = getResponsiveColumns();
+        if (newColumns !== currentColumns) {
+          currentColumns = newColumns;
+          updateColumnsUI(currentColumns);
+          render();
+        }
+      }, 150);
+    });
 
     // Event listeners
     document.querySelectorAll('[data-columns]').forEach(btn => {
       btn.addEventListener('click', () => {
+        autoResponsive = false; // Disable auto-responsive when user manually selects
         document.querySelectorAll('[data-columns]').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         currentColumns = parseInt(btn.dataset.columns);
