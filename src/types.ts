@@ -40,10 +40,14 @@ export interface MasonryConfig {
   columns?: number | ColumnConfig[];
   /** Padding around the container (px) */
   padding?: number;
-  /** Animation duration for layout changes (ms) */
-  animationDuration?: number;
-  /** Enable/disable animations */
+  /** Enable/disable animations (default: true) */
   animate?: boolean;
+  /** Animation duration for layout changes in ms (default: 300) */
+  animationDuration?: number;
+  /** Easing function for animations (default: 'ease-out') */
+  animationEasing?: string;
+  /** Stagger delay between cards in ms (default: 0) */
+  staggerDelay?: number;
 }
 
 // ============================================

@@ -75,6 +75,10 @@ function App() {
 | `columns` | `number \| ColumnConfig[]` | `3` | Number of columns or responsive config |
 | `gap` | `number` | `16` | Gap between items in pixels |
 | `theme` | `'light' \| 'dark'` | `'light'` | Theme for Twitter embeds |
+| `animate` | `boolean` | `true` | Enable/disable layout animations |
+| `animationDuration` | `number` | `300` | Animation duration in milliseconds |
+| `animationEasing` | `string` | `'ease-out'` | CSS easing function |
+| `staggerDelay` | `number` | `0` | Delay between each card animation (ms) |
 | `className` | `string` | - | Custom class for container |
 | `style` | `CSSProperties` | - | Custom styles for container |
 | `onEmbedLoad` | `(post: SocialPost) => void` | - | Called when an embed loads |
@@ -164,12 +168,39 @@ detectPlatform('https://x.com/user/status/123'); // 'twitter'
 detectPlatform('https://instagram.com/p/ABC'); // 'instagram'
 ```
 
+## Animation
+
+Social Masonry uses FLIP (First, Last, Invert, Play) animation technique for smooth layout transitions when window resizes or column count changes.
+
+### Configuration
+
+```tsx
+<SocialMasonry
+  posts={posts}
+  animate={true}           // Enable animations (default: true)
+  animationDuration={300}  // Duration in ms (default: 300)
+  animationEasing="ease-out"  // CSS easing (default: 'ease-out')
+  staggerDelay={50}        // Delay between cards (default: 0)
+/>
+```
+
+### Accessibility
+
+Animations automatically respect the user's `prefers-reduced-motion` system preference. When this setting is enabled, layout changes happen instantly without animation.
+
+### Disabling Animations
+
+```tsx
+<SocialMasonry posts={posts} animate={false} />
+```
+
 ## How It Works
 
 1. **Script Loading**: Twitter's `widgets.js` and Instagram's `embed.js` are loaded on-demand when needed
 2. **Widget Creation**: Official APIs (`twttr.widgets.createTweet` and `instgrm.Embeds.process`) create native embeds
 3. **Masonry Layout**: Posts are distributed across columns using a simple round-robin algorithm
 4. **Auto-sizing**: Each embed automatically sizes to its content - no fixed heights
+5. **FLIP Animation**: Cards smoothly animate to new positions using GPU-accelerated CSS transforms
 
 ## Browser Support
 
