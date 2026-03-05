@@ -79,6 +79,8 @@ function App() {
 | `animationDuration` | `number` | `300` | Animation duration in milliseconds |
 | `animationEasing` | `string` | `'ease-out'` | CSS easing function |
 | `staggerDelay` | `number` | `0` | Delay between each card animation (ms) |
+| `lazyLoad` | `boolean` | `false` | Enable lazy loading of embeds via Intersection Observer |
+| `lazyLoadRootMargin` | `string` | `'200px 0px'` | Root margin for Intersection Observer |
 | `className` | `string` | - | Custom class for container |
 | `style` | `CSSProperties` | - | Custom styles for container |
 | `onEmbedLoad` | `(post: SocialPost) => void` | - | Called when an embed loads |
@@ -194,6 +196,23 @@ Animations automatically respect the user's `prefers-reduced-motion` system pref
 <SocialMasonry posts={posts} animate={false} />
 ```
 
+## Lazy Loading
+
+When displaying many embeds, loading all widgets at once can be slow. Enable lazy loading to only create embeds when they scroll into view.
+
+```tsx
+<SocialMasonry
+  posts={posts}
+  lazyLoad={true}              // Enable lazy loading (default: false)
+  lazyLoadRootMargin="200px 0px"  // Start loading 200px before viewport (default)
+/>
+```
+
+- Embeds are created only when they enter the viewport (plus the root margin buffer)
+- Once an embed is created, it stays in the DOM even when scrolled out of view
+- A placeholder matching the embed's default height is shown until the embed loads
+- Fully backward-compatible: disabled by default
+
 ## How It Works
 
 1. **Script Loading**: Twitter's `widgets.js` and Instagram's `embed.js` are loaded on-demand when needed
@@ -201,6 +220,7 @@ Animations automatically respect the user's `prefers-reduced-motion` system pref
 3. **Masonry Layout**: Posts are distributed across columns using a simple round-robin algorithm
 4. **Auto-sizing**: Each embed automatically sizes to its content - no fixed heights
 5. **FLIP Animation**: Cards smoothly animate to new positions using GPU-accelerated CSS transforms
+6. **Lazy Loading**: When enabled, Intersection Observer defers embed creation until items scroll into view
 
 ## Browser Support
 

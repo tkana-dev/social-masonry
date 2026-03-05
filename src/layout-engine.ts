@@ -37,6 +37,8 @@ export class LayoutEngine {
       animationDuration: 300,
       animationEasing: 'ease-out',
       staggerDelay: 0,
+      lazyLoad: false,
+      lazyLoadRootMargin: '200px 0px',
       twitterHeight: DEFAULT_TWITTER_HEIGHT,
       instagramHeight: DEFAULT_INSTAGRAM_HEIGHT,
       ...options,

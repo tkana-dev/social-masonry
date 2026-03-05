@@ -358,6 +358,45 @@ const InstagramEmbed: React.FC<InstagramEmbedProps> = ({
 };
 
 // ============================================
+// Lazy Embed Component
+// ============================================
+
+interface LazyEmbedProps {
+  children: React.ReactNode;
+  rootMargin: string;
+  placeholder: React.ReactNode;
+}
+
+const LazyEmbed: React.FC<LazyEmbedProps> = ({ children, rootMargin, placeholder }) => {
+  const ref = useRef<HTMLDivElement>(null);
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setVisible(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin }
+    );
+
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [rootMargin]);
+
+  return (
+    <div ref={ref}>
+      {visible ? children : placeholder}
+    </div>
+  );
+};
+
+// ============================================
 // Layout Calculator
 // ============================================
 
@@ -447,6 +486,8 @@ export const SocialMasonry = forwardRef<SocialMasonryRef, SocialMasonryProps>(
       animationDuration = 300,
       animationEasing = 'ease-out',
       staggerDelay = 0,
+      lazyLoad = false,
+      lazyLoadRootMargin = '200px 0px',
       onEmbedLoad,
       onEmbedError,
       className,
@@ -639,44 +680,69 @@ export const SocialMasonry = forwardRef<SocialMasonryRef, SocialMasonryProps>(
             pointerEvents: 'none',
           };
 
+          let embedContent: React.ReactNode = null;
+          let embedClassName = '';
+          let defaultHeight = 0;
+
           if (post.platform === 'twitter') {
-            return (
-              <div
-                key={postId}
-                ref={setRef}
-                className="sm-embed sm-embed--twitter"
-                style={itemStyle}
-              >
-                <TwitterEmbed
-                  url={post.url}
-                  theme={theme}
-                  onLoad={() => onEmbedLoad?.(post)}
-                  onError={(error) => onEmbedError?.(post, error)}
-                  onHeightChange={(h) => handleHeightChange(postId, h)}
-                />
-              </div>
+            embedClassName = 'sm-embed sm-embed--twitter';
+            defaultHeight = DEFAULT_TWITTER_HEIGHT;
+            embedContent = (
+              <TwitterEmbed
+                url={post.url}
+                theme={theme}
+                onLoad={() => onEmbedLoad?.(post)}
+                onError={(error) => onEmbedError?.(post, error)}
+                onHeightChange={(h) => handleHeightChange(postId, h)}
+              />
             );
+          } else if (post.platform === 'instagram') {
+            embedClassName = 'sm-embed sm-embed--instagram';
+            defaultHeight = DEFAULT_INSTAGRAM_HEIGHT;
+            embedContent = (
+              <InstagramEmbed
+                url={post.url}
+                onLoad={() => onEmbedLoad?.(post)}
+                onError={(error) => onEmbedError?.(post, error)}
+                onHeightChange={(h) => handleHeightChange(postId, h)}
+              />
+            );
+          } else {
+            return null;
           }
 
-          if (post.platform === 'instagram') {
-            return (
-              <div
-                key={postId}
-                ref={setRef}
-                className="sm-embed sm-embed--instagram"
-                style={itemStyle}
-              >
-                <InstagramEmbed
-                  url={post.url}
-                  onLoad={() => onEmbedLoad?.(post)}
-                  onError={(error) => onEmbedError?.(post, error)}
-                  onHeightChange={(h) => handleHeightChange(postId, h)}
-                />
-              </div>
-            );
-          }
+          const wrappedContent = lazyLoad ? (
+            <LazyEmbed
+              rootMargin={lazyLoadRootMargin}
+              placeholder={
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  minHeight: defaultHeight,
+                  backgroundColor: theme === 'dark' ? '#15202b' : '#f5f5f5',
+                  borderRadius: 12,
+                }}>
+                  <div style={{ color: theme === 'dark' ? '#8899a6' : '#666' }}>
+                    Loading...
+                  </div>
+                </div>
+              }
+            >
+              {embedContent}
+            </LazyEmbed>
+          ) : embedContent;
 
-          return null;
+          return (
+            <div
+              key={postId}
+              ref={setRef}
+              className={embedClassName}
+              style={itemStyle}
+            >
+              {wrappedContent}
+            </div>
+          );
         })}
 
         {posts.length === 0 && (

@@ -56,6 +56,7 @@ function App() {
     setCurrentColumns(cols);
   };
 
+  const [lazyLoad, setLazyLoad] = useState(true);
   const [codeTab, setCodeTab] = useState<'react' | 'install'>('react');
 
   return (
@@ -65,7 +66,7 @@ function App() {
         <div className="hero-content">
           <div className="badge">
             <span className="badge-dot" />
-            v1.1.0 — Animated Transitions
+            v1.2.0 — Lazy Loading
           </div>
           <h1>Masonry Layout for Social Embeds</h1>
           <p className="hero-description">
@@ -120,9 +121,9 @@ function App() {
             <p className="feature-description">First-class React component with TypeScript support.</p>
           </div>
           <div className="feature-card">
-            <div className="feature-icon cyan">🪶</div>
-            <h3 className="feature-title">Lightweight</h3>
-            <p className="feature-description">Minimal bundle size. Widgets loaded on-demand.</p>
+            <div className="feature-icon cyan">⏳</div>
+            <h3 className="feature-title">Lazy Loading</h3>
+            <p className="feature-description">Load embeds on-demand as they scroll into view via Intersection Observer.</p>
           </div>
         </div>
       </section>
@@ -163,6 +164,21 @@ function App() {
                 Dark
               </button>
             </div>
+            <div className="control-group">
+              <span className="control-label">Lazy Load:</span>
+              <button
+                className={`control-btn ${lazyLoad ? 'active' : ''}`}
+                onClick={() => setLazyLoad(true)}
+              >
+                On
+              </button>
+              <button
+                className={`control-btn ${!lazyLoad ? 'active' : ''}`}
+                onClick={() => setLazyLoad(false)}
+              >
+                Off
+              </button>
+            </div>
           </div>
           <div className="masonry-wrapper">
             <SocialMasonry
@@ -174,6 +190,7 @@ function App() {
               animationDuration={300}
               animationEasing="ease-out"
               staggerDelay={20}
+              lazyLoad={lazyLoad}
               style={{ maxWidth: 1400 }}
             />
           </div>
@@ -219,6 +236,7 @@ function App() {
                 {'      '}<span className="code-property">gap</span>={'{'}<span className="code-number">16</span>{'}'}{'\n'}
                 {'      '}<span className="code-property">theme</span>=<span className="code-string">"light"</span>{'\n'}
                 {'      '}<span className="code-property">animate</span>={'{'}<span className="code-keyword">true</span>{'}'}{'\n'}
+                {'      '}<span className="code-property">lazyLoad</span>={'{'}<span className="code-keyword">true</span>{'}'}{'\n'}
                 {'    '}/&gt;{'\n'}
                 {'  '});{'\n'}
                 {'}'}

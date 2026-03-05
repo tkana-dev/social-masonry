@@ -48,6 +48,10 @@ export interface MasonryConfig {
   animationEasing?: string;
   /** Stagger delay between cards in ms (default: 0) */
   staggerDelay?: number;
+  /** Enable lazy loading of embeds via Intersection Observer (default: false) */
+  lazyLoad?: boolean;
+  /** Root margin for Intersection Observer (default: '200px 0px') */
+  lazyLoadRootMargin?: string;
 }
 
 // ============================================
