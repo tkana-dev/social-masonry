@@ -6,7 +6,19 @@
  */
 
 // Layout Engine
-export { LayoutEngine, createLayoutEngine } from './layout-engine';
+export {
+  LayoutEngine,
+  createLayoutEngine,
+  calculateMasonryLayout,
+  MAX_TWITTER_WIDTH,
+  MAX_INSTAGRAM_WIDTH,
+  MAX_EMBED_WIDTH,
+} from './layout-engine';
+export type {
+  LayoutEngineOptions,
+  CalculateLayoutOptions,
+  CalculateLayoutResult,
+} from './layout-engine';
 
 // Types
 export type {

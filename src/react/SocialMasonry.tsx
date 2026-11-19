@@ -1,11 +1,12 @@
 /**
  * Social Masonry - React Component
  * Masonry layout for X (Twitter) and Instagram embeds using official widgets
- * Uses absolute positioning with FLIP animations for smooth transitions
+ * Uses stable column pinning and GPU-accelerated CSS transforms to prevent loading layout jank
  */
 
 import React, {
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   useCallback,
@@ -16,77 +17,412 @@ import React, {
 import type {
   SocialMasonryProps,
   SocialPost,
+  SocialPlatform,
   ItemPosition,
 } from '../types';
 import {
   defaultColumnConfig,
+  extractTweetId,
   generatePostId,
   getColumnCount,
   DEFAULT_TWITTER_HEIGHT,
   DEFAULT_INSTAGRAM_HEIGHT,
 } from '../utils';
+import { calculateMasonryLayout } from '../layout-engine';
+
+const useIsomorphicLayoutEffect =
+  typeof window !== 'undefined' ? useLayoutEffect : useEffect;
 
 // ============================================
-// Animation Utilities
+// Runtime Styles (Shimmer Animation)
 // ============================================
 
-/**
- * Check if user prefers reduced motion
- */
-const prefersReducedMotion = (): boolean => {
-  if (typeof window === 'undefined') return false;
-  return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+const SHIMMER_STYLE_ID = 'sm-runtime-styles';
+
+const ensureRuntimeStyles = (): void => {
+  if (typeof document === 'undefined') return;
+  if (document.getElementById(SHIMMER_STYLE_ID)) return;
+
+  const style = document.createElement('style');
+  style.id = SHIMMER_STYLE_ID;
+  style.textContent = `
+    @keyframes sm-shimmer {
+      0% { background-position: -200% 0; }
+      100% { background-position: 200% 0; }
+    }
+    .sm-skeleton-bar {
+      background-size: 200% 100%;
+      animation: sm-shimmer 1.5s ease-in-out infinite;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .sm-skeleton-bar {
+        animation: none;
+      }
+    }
+  `;
+  document.head.appendChild(style);
 };
 
 // ============================================
-// Script Loading
+// Reduced Motion Hook
 // ============================================
 
-let twitterScriptLoaded = false;
-let instagramScriptLoaded = false;
+const usePrefersReducedMotion = (): boolean => {
+  const [reduced, setReduced] = useState<boolean>(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return false;
+    return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  });
 
-const loadTwitterScript = (): Promise<void> => {
-  if (twitterScriptLoaded) return Promise.resolve();
-  if (typeof window === 'undefined') return Promise.resolve();
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return;
+    const mediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+    setReduced(mediaQuery.matches);
 
-  return new Promise((resolve) => {
-    if ((window as Window & { twttr?: unknown }).twttr) {
-      twitterScriptLoaded = true;
-      resolve();
+    const handleChange = (event: MediaQueryListEvent) => {
+      setReduced(event.matches);
+    };
+
+    if (mediaQuery.addEventListener) {
+      mediaQuery.addEventListener('change', handleChange);
+      return () => mediaQuery.removeEventListener('change', handleChange);
+    }
+    return undefined;
+  }, []);
+
+  return reduced;
+};
+
+// ============================================
+// Deduplicated Script Loading
+// ============================================
+
+interface TwttrGlobal {
+  widgets?: {
+    createTweet: (
+      id: string,
+      el: HTMLElement,
+      options: Record<string, unknown>
+    ) => Promise<HTMLElement | undefined>;
+  };
+  ready?: (cb: (twttr: TwttrGlobal) => void) => void;
+}
+
+interface InstgrmGlobal {
+  Embeds?: {
+    process: () => void;
+  };
+}
+
+type EmbedWindow = Window & {
+  twttr?: TwttrGlobal;
+  instgrm?: InstgrmGlobal;
+};
+
+let twitterScriptPromise: Promise<TwttrGlobal> | null = null;
+let instagramScriptPromise: Promise<InstgrmGlobal> | null = null;
+let instagramProcessTimer: ReturnType<typeof setTimeout> | null = null;
+
+const loadTwitterScript = (): Promise<TwttrGlobal> => {
+  if (typeof window === 'undefined') {
+    return Promise.reject(new Error('Twitter embeds require a browser environment'));
+  }
+
+  const win = window as EmbedWindow;
+  if (win.twttr?.widgets) {
+    return Promise.resolve(win.twttr);
+  }
+
+  if (twitterScriptPromise) {
+    return twitterScriptPromise;
+  }
+
+  twitterScriptPromise = new Promise<TwttrGlobal>((resolve, reject) => {
+    const resolveWhenReady = () => {
+      const twttr = (window as EmbedWindow).twttr;
+      if (twttr?.widgets) {
+        resolve(twttr);
+      } else if (twttr?.ready) {
+        twttr.ready((readyTwttr) => resolve(readyTwttr));
+      } else {
+        twitterScriptPromise = null;
+        reject(new Error('Twitter widgets failed to initialize'));
+      }
+    };
+
+    if (win.twttr?.ready) {
+      win.twttr.ready((readyTwttr) => resolve(readyTwttr));
+      return;
+    }
+
+    const existingScript = document.querySelector<HTMLScriptElement>(
+      'script[src="https://platform.twitter.com/widgets.js"]'
+    );
+
+    if (existingScript) {
+      existingScript.addEventListener('load', resolveWhenReady, { once: true });
+      existingScript.addEventListener(
+        'error',
+        () => {
+          twitterScriptPromise = null;
+          reject(new Error('Failed to load Twitter widgets script'));
+        },
+        { once: true }
+      );
       return;
     }
 
     const script = document.createElement('script');
     script.src = 'https://platform.twitter.com/widgets.js';
     script.async = true;
-    script.onload = () => {
-      twitterScriptLoaded = true;
-      resolve();
+    script.onload = resolveWhenReady;
+    script.onerror = () => {
+      twitterScriptPromise = null;
+      reject(new Error('Failed to load Twitter widgets script'));
     };
     document.head.appendChild(script);
   });
+
+  return twitterScriptPromise;
 };
 
-const loadInstagramScript = (): Promise<void> => {
-  if (instagramScriptLoaded) return Promise.resolve();
-  if (typeof window === 'undefined') return Promise.resolve();
+const loadInstagramScript = (): Promise<InstgrmGlobal> => {
+  if (typeof window === 'undefined') {
+    return Promise.reject(new Error('Instagram embeds require a browser environment'));
+  }
 
-  return new Promise((resolve) => {
-    if ((window as Window & { instgrm?: unknown }).instgrm) {
-      instagramScriptLoaded = true;
-      resolve();
+  const win = window as EmbedWindow;
+  if (win.instgrm?.Embeds) {
+    return Promise.resolve(win.instgrm);
+  }
+
+  if (instagramScriptPromise) {
+    return instagramScriptPromise;
+  }
+
+  instagramScriptPromise = new Promise<InstgrmGlobal>((resolve, reject) => {
+    const resolveWhenReady = () => {
+      const instgrm = (window as EmbedWindow).instgrm;
+      if (instgrm?.Embeds) {
+        resolve(instgrm);
+      } else {
+        instagramScriptPromise = null;
+        reject(new Error('Instagram embed script failed to initialize'));
+      }
+    };
+
+    const existingScript = document.querySelector<HTMLScriptElement>(
+      'script[src="https://www.instagram.com/embed.js"]'
+    );
+
+    if (existingScript) {
+      existingScript.addEventListener('load', resolveWhenReady, { once: true });
+      existingScript.addEventListener(
+        'error',
+        () => {
+          instagramScriptPromise = null;
+          reject(new Error('Failed to load Instagram embed script'));
+        },
+        { once: true }
+      );
       return;
     }
 
     const script = document.createElement('script');
     script.src = 'https://www.instagram.com/embed.js';
     script.async = true;
-    script.onload = () => {
-      instagramScriptLoaded = true;
-      resolve();
+    script.onload = resolveWhenReady;
+    script.onerror = () => {
+      instagramScriptPromise = null;
+      reject(new Error('Failed to load Instagram embed script'));
     };
     document.head.appendChild(script);
   });
+
+  return instagramScriptPromise;
+};
+
+/**
+ * Batch multiple Instagram embed process calls into a single pass
+ */
+const scheduleInstagramProcess = (): void => {
+  if (instagramProcessTimer) {
+    clearTimeout(instagramProcessTimer);
+  }
+  instagramProcessTimer = setTimeout(() => {
+    instagramProcessTimer = null;
+    const instgrm = (window as EmbedWindow).instgrm;
+    instgrm?.Embeds?.process();
+  }, 30);
+};
+
+// ============================================
+// Skeleton & Fallback Components
+// ============================================
+
+interface EmbedSkeletonProps {
+  height: number;
+  theme: 'light' | 'dark';
+  platform: SocialPlatform;
+}
+
+const EmbedSkeleton: React.FC<EmbedSkeletonProps> = ({ height, theme, platform }) => {
+  useEffect(() => {
+    ensureRuntimeStyles();
+  }, []);
+
+  const isDark = theme === 'dark' && platform === 'twitter';
+  const surfaceBg = isDark ? '#16181c' : '#ffffff';
+  const borderColor = isDark ? '#2f3336' : '#e5e7eb';
+  const shimmerGradient = isDark
+    ? 'linear-gradient(90deg, #22252a 25%, #2f333a 50%, #22252a 75%)'
+    : 'linear-gradient(90deg, #f1f3f5 25%, #e5e7eb 50%, #f1f3f5 75%)';
+
+  const mediaHeight = Math.max(120, height - 170);
+
+  return (
+    <div
+      className="sm-skeleton"
+      aria-busy="true"
+      aria-label={`Loading ${platform} embed`}
+      style={{
+        height,
+        width: '100%',
+        boxSizing: 'border-box',
+        backgroundColor: surfaceBg,
+        border: `1px solid ${borderColor}`,
+        borderRadius: 12,
+        padding: 16,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 12,
+        overflow: 'hidden',
+      }}
+    >
+      {/* Header row */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <div
+          className="sm-skeleton-bar"
+          style={{
+            width: 38,
+            height: 38,
+            borderRadius: '50%',
+            flexShrink: 0,
+            backgroundImage: shimmerGradient,
+          }}
+        />
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div
+            className="sm-skeleton-bar"
+            style={{
+              width: '45%',
+              height: 12,
+              borderRadius: 6,
+              backgroundImage: shimmerGradient,
+            }}
+          />
+          <div
+            className="sm-skeleton-bar"
+            style={{
+              width: '30%',
+              height: 10,
+              borderRadius: 5,
+              backgroundImage: shimmerGradient,
+            }}
+          />
+        </div>
+      </div>
+
+      {/* Text lines */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div
+          className="sm-skeleton-bar"
+          style={{
+            width: '92%',
+            height: 12,
+            borderRadius: 6,
+            backgroundImage: shimmerGradient,
+          }}
+        />
+        <div
+          className="sm-skeleton-bar"
+          style={{
+            width: '74%',
+            height: 12,
+            borderRadius: 6,
+            backgroundImage: shimmerGradient,
+          }}
+        />
+      </div>
+
+      {/* Media block */}
+      <div
+        className="sm-skeleton-bar"
+        style={{
+          flex: 1,
+          minHeight: Math.min(mediaHeight, 260),
+          borderRadius: 10,
+          backgroundImage: shimmerGradient,
+        }}
+      />
+    </div>
+  );
+};
+
+interface EmbedErrorFallbackProps {
+  url: string;
+  platform: SocialPlatform;
+  theme: 'light' | 'dark';
+}
+
+const EmbedErrorFallback: React.FC<EmbedErrorFallbackProps> = ({
+  url,
+  platform,
+  theme,
+}) => {
+  const isDark = theme === 'dark' && platform === 'twitter';
+  const label = platform === 'twitter' ? 'View on X' : 'View on Instagram';
+
+  return (
+    <div
+      className="sm-embed-fallback"
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        minHeight: 140,
+        padding: 20,
+        boxSizing: 'border-box',
+        backgroundColor: isDark ? '#16181c' : '#fafafa',
+        border: `1px solid ${isDark ? '#2f3336' : '#e5e7eb'}`,
+        borderRadius: 12,
+        textAlign: 'center',
+      }}
+    >
+      <div
+        style={{
+          fontSize: 13,
+          color: isDark ? '#8b98a5' : '#6b7280',
+        }}
+      >
+        Embed unavailable
+      </div>
+      <a
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        style={{
+          fontSize: 13,
+          fontWeight: 600,
+          color: platform === 'instagram' ? '#e1306c' : '#1d9bf0',
+          textDecoration: 'none',
+        }}
+      >
+        {label} ↗
+      </a>
+    </div>
+  );
 };
 
 // ============================================
@@ -96,6 +432,9 @@ const loadInstagramScript = (): Promise<void> => {
 interface TwitterEmbedProps {
   url: string;
   theme?: 'light' | 'dark';
+  defaultHeight: number;
+  hideCard?: boolean;
+  hideThread?: boolean;
   onLoad?: () => void;
   onError?: (error: Error) => void;
   onHeightChange?: (height: number) => void;
@@ -104,16 +443,18 @@ interface TwitterEmbedProps {
 const TwitterEmbed: React.FC<TwitterEmbedProps> = ({
   url,
   theme = 'light',
+  defaultHeight,
+  hideCard = false,
+  hideThread = true,
   onLoad,
   onError,
   onHeightChange,
 }) => {
-  const containerRef = useRef<HTMLDivElement>(null);
   const embedRef = useRef<HTMLDivElement>(null);
-  const [loading, setLoading] = useState(true);
-  const mountedRef = useRef(true);
+  const fallbackRef = useRef<HTMLDivElement>(null);
+  const [status, setStatus] = useState<'loading' | 'loaded' | 'error'>('loading');
 
-  // Store callbacks in refs to avoid re-running effect
+  // Store callbacks in refs to avoid re-running effects
   const onLoadRef = useRef(onLoad);
   const onErrorRef = useRef(onError);
   const onHeightChangeRef = useRef(onHeightChange);
@@ -124,17 +465,23 @@ const TwitterEmbed: React.FC<TwitterEmbedProps> = ({
     onHeightChangeRef.current = onHeightChange;
   });
 
+  // Watch rendered content height only after loading completes
   useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
+    if (status === 'loading') return;
 
-  // Watch for height changes with ResizeObserver
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
+    const target = status === 'loaded' ? embedRef.current : fallbackRef.current;
+    if (!target) return;
+
+    const measure = () => {
+      const rectHeight = target.getBoundingClientRect().height;
+      if (rectHeight > 0) {
+        onHeightChangeRef.current?.(rectHeight);
+      }
+    };
+
+    measure();
+
+    if (typeof ResizeObserver === 'undefined') return;
 
     const resizeObserver = new ResizeObserver((entries) => {
       for (const entry of entries) {
@@ -145,81 +492,111 @@ const TwitterEmbed: React.FC<TwitterEmbedProps> = ({
       }
     });
 
-    resizeObserver.observe(container);
+    resizeObserver.observe(target);
     return () => resizeObserver.disconnect();
-  }, []);
+  }, [status]);
 
   useEffect(() => {
     const embedContainer = embedRef.current;
     if (!embedContainer) return;
 
-    // Create a fresh container for the widget
+    let cancelled = false;
     const widgetContainer = document.createElement('div');
     embedContainer.appendChild(widgetContainer);
-    setLoading(true);
+    setStatus('loading');
 
-    loadTwitterScript().then(() => {
-      if (!mountedRef.current) return;
-
-      const twttr = (window as Window & { twttr?: { widgets: { createTweet: (id: string, el: HTMLElement, options: Record<string, unknown>) => Promise<HTMLElement | undefined> } } }).twttr;
-      if (!twttr) {
-        onErrorRef.current?.(new Error('Twitter widgets not loaded'));
-        setLoading(false);
-        return;
-      }
-
-      // Extract tweet ID from URL
-      const match = url.match(/(?:twitter\.com|x\.com)\/\w+\/status\/(\d+)/);
-      if (!match) {
-        onErrorRef.current?.(new Error('Invalid Twitter URL'));
-        setLoading(false);
-        return;
-      }
-
-      twttr.widgets.createTweet(match[1], widgetContainer, {
-        theme,
-        conversation: 'none',
-        dnt: true,
-      }).then((el) => {
-        if (!mountedRef.current) return;
-        setLoading(false);
-        if (el) {
-          onLoadRef.current?.();
-        } else {
-          onErrorRef.current?.(new Error('Tweet not found or unavailable'));
+    const tweetId = extractTweetId(url);
+    if (!tweetId) {
+      setStatus('error');
+      onErrorRef.current?.(new Error('Invalid Twitter URL'));
+      return () => {
+        cancelled = true;
+        if (widgetContainer.parentNode === embedContainer) {
+          embedContainer.removeChild(widgetContainer);
         }
-      }).catch((err: Error) => {
-        if (!mountedRef.current) return;
-        setLoading(false);
-        onErrorRef.current?.(err);
+      };
+    }
+
+    loadTwitterScript()
+      .then((twttr) => {
+        if (cancelled) return;
+        if (!twttr.widgets) {
+          setStatus('error');
+          onErrorRef.current?.(new Error('Twitter widgets not loaded'));
+          return;
+        }
+
+        const widgetOptions: Record<string, unknown> = {
+          theme,
+          conversation: hideThread ? 'none' : 'all',
+          dnt: true,
+        };
+        if (hideCard) {
+          widgetOptions.cards = 'hidden';
+        }
+
+        return twttr.widgets.createTweet(tweetId, widgetContainer, widgetOptions).then((el) => {
+          if (cancelled) return;
+          if (el) {
+            setStatus('loaded');
+            onLoadRef.current?.();
+          } else {
+            setStatus('error');
+            onErrorRef.current?.(new Error('Tweet not found or unavailable'));
+          }
+        });
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setStatus('error');
+        onErrorRef.current?.(err instanceof Error ? err : new Error(String(err)));
       });
-    });
 
     return () => {
-      // Safely remove the widget container
-      if (embedContainer && widgetContainer.parentNode === embedContainer) {
+      cancelled = true;
+      if (widgetContainer.parentNode === embedContainer) {
         embedContainer.removeChild(widgetContainer);
       }
     };
-  }, [url, theme]);
+  }, [url, theme, hideCard, hideThread]);
+
+  const isLoading = status === 'loading';
 
   return (
-    <div ref={containerRef} className="sm-twitter-embed">
-      {loading && (
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          minHeight: 200,
-          backgroundColor: theme === 'dark' ? '#15202b' : '#f5f5f5',
-          borderRadius: 12,
-        }}>
-          <div style={{ color: theme === 'dark' ? '#8899a6' : '#666' }}>
-            Loading...
-          </div>
+    <div
+      className="sm-twitter-embed"
+      style={{
+        position: 'relative',
+        height: isLoading ? defaultHeight : undefined,
+        overflow: isLoading ? 'hidden' : undefined,
+      }}
+    >
+      {isLoading && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            zIndex: 1,
+          }}
+        >
+          <EmbedSkeleton height={defaultHeight} theme={theme} platform="twitter" />
         </div>
       )}
-      <div ref={embedRef} />
+      {status === 'error' ? (
+        <div ref={fallbackRef}>
+          <EmbedErrorFallback url={url} platform="twitter" theme={theme} />
+        </div>
+      ) : null}
+      <div
+        ref={embedRef}
+        style={{
+          opacity: status === 'loaded' ? 1 : 0,
+          transition: 'opacity 250ms ease',
+          display: status === 'error' ? 'none' : undefined,
+        }}
+      />
     </div>
   );
 };
@@ -228,8 +605,14 @@ const TwitterEmbed: React.FC<TwitterEmbedProps> = ({
 // Instagram Embed Component
 // ============================================
 
+const INSTAGRAM_MIN_RENDERED_HEIGHT = 150;
+const INSTAGRAM_SETTLE_DELAY_MS = 120;
+const INSTAGRAM_TIMEOUT_MS = 8000;
+
 interface InstagramEmbedProps {
   url: string;
+  theme?: 'light' | 'dark';
+  defaultHeight: number;
   onLoad?: () => void;
   onError?: (error: Error) => void;
   onHeightChange?: (height: number) => void;
@@ -237,16 +620,17 @@ interface InstagramEmbedProps {
 
 const InstagramEmbed: React.FC<InstagramEmbedProps> = ({
   url,
+  theme = 'light',
+  defaultHeight,
   onLoad,
   onError,
   onHeightChange,
 }) => {
-  const containerRef = useRef<HTMLDivElement>(null);
   const embedRef = useRef<HTMLDivElement>(null);
-  const [loading, setLoading] = useState(true);
-  const mountedRef = useRef(true);
+  const fallbackRef = useRef<HTMLDivElement>(null);
+  const [status, setStatus] = useState<'loading' | 'loaded' | 'error'>('loading');
 
-  // Store callbacks in refs to avoid re-running effect
+  // Store callbacks in refs to avoid re-running effects
   const onLoadRef = useRef(onLoad);
   const onErrorRef = useRef(onError);
   const onHeightChangeRef = useRef(onHeightChange);
@@ -257,17 +641,23 @@ const InstagramEmbed: React.FC<InstagramEmbedProps> = ({
     onHeightChangeRef.current = onHeightChange;
   });
 
+  // Watch rendered content height only after loading completes
   useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
+    if (status === 'loading') return;
 
-  // Watch for height changes with ResizeObserver
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
+    const target = status === 'loaded' ? embedRef.current : fallbackRef.current;
+    if (!target) return;
+
+    const measure = () => {
+      const rectHeight = target.getBoundingClientRect().height;
+      if (rectHeight > 0) {
+        onHeightChangeRef.current?.(rectHeight);
+      }
+    };
+
+    measure();
+
+    if (typeof ResizeObserver === 'undefined') return;
 
     const resizeObserver = new ResizeObserver((entries) => {
       for (const entry of entries) {
@@ -278,29 +668,38 @@ const InstagramEmbed: React.FC<InstagramEmbedProps> = ({
       }
     });
 
-    resizeObserver.observe(container);
+    resizeObserver.observe(target);
     return () => resizeObserver.disconnect();
-  }, []);
+  }, [status]);
 
   useEffect(() => {
     const embedContainer = embedRef.current;
     if (!embedContainer) return;
 
-    // Extract post ID from URL
-    const match = url.match(/instagram\.com\/(?:p|reel)\/([A-Za-z0-9_-]+)/);
+    let cancelled = false;
+    let settled = false;
+    let settleTimer: ReturnType<typeof setTimeout> | null = null;
+    let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
+    let mutationObserver: MutationObserver | null = null;
+    let probeResizeObserver: ResizeObserver | null = null;
+
+    setStatus('loading');
+
+    const match = url.match(/instagram\.com\/(p|reel)\/([A-Za-z0-9_-]+)/);
     if (!match) {
+      setStatus('error');
       onErrorRef.current?.(new Error('Invalid Instagram URL'));
-      setLoading(false);
       return;
     }
 
-    // Create a fresh container for the widget
+    const [, postType, postId] = match;
+
     const widgetContainer = document.createElement('div');
     widgetContainer.innerHTML = `
       <blockquote
         class="instagram-media"
         data-instgrm-captioned
-        data-instgrm-permalink="https://www.instagram.com/p/${match[1]}/"
+        data-instgrm-permalink="https://www.instagram.com/${postType}/${postId}/"
         data-instgrm-version="14"
         style="
           background:#FFF;
@@ -318,41 +717,129 @@ const InstagramEmbed: React.FC<InstagramEmbedProps> = ({
     `;
     embedContainer.appendChild(widgetContainer);
 
-    loadInstagramScript().then(() => {
-      if (!mountedRef.current) return;
-      const instgrm = (window as Window & { instgrm?: { Embeds: { process: () => void } } }).instgrm;
-      if (instgrm) {
-        instgrm.Embeds.process();
-        setLoading(false);
-        onLoadRef.current?.();
+    const cleanupObservers = () => {
+      if (settleTimer) {
+        clearTimeout(settleTimer);
+        settleTimer = null;
       }
-    });
+      if (timeoutTimer) {
+        clearTimeout(timeoutTimer);
+        timeoutTimer = null;
+      }
+      mutationObserver?.disconnect();
+      mutationObserver = null;
+      probeResizeObserver?.disconnect();
+      probeResizeObserver = null;
+    };
+
+    const markLoaded = () => {
+      if (cancelled || settled) return;
+      settled = true;
+      cleanupObservers();
+      setStatus('loaded');
+      onLoadRef.current?.();
+    };
+
+    const checkIframeReady = () => {
+      if (cancelled || settled) return;
+      const iframe = widgetContainer.querySelector('iframe');
+      if (!iframe) return;
+
+      const iframeHeight = iframe.getBoundingClientRect().height;
+      if (iframeHeight >= INSTAGRAM_MIN_RENDERED_HEIGHT) {
+        // Wait briefly for Instagram's postMessage height adjustment to settle
+        if (settleTimer) clearTimeout(settleTimer);
+        settleTimer = setTimeout(markLoaded, INSTAGRAM_SETTLE_DELAY_MS);
+      }
+    };
+
+    if (typeof MutationObserver !== 'undefined') {
+      mutationObserver = new MutationObserver(checkIframeReady);
+      mutationObserver.observe(widgetContainer, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['style', 'height', 'class'],
+      });
+    }
+
+    if (typeof ResizeObserver !== 'undefined') {
+      probeResizeObserver = new ResizeObserver(checkIframeReady);
+      probeResizeObserver.observe(widgetContainer);
+    }
+
+    loadInstagramScript()
+      .then(() => {
+        if (cancelled) return;
+        scheduleInstagramProcess();
+
+        timeoutTimer = setTimeout(() => {
+          if (cancelled || settled) return;
+          const iframe = widgetContainer.querySelector('iframe');
+          if (iframe && iframe.getBoundingClientRect().height > 0) {
+            markLoaded();
+          } else {
+            settled = true;
+            cleanupObservers();
+            setStatus('error');
+            onErrorRef.current?.(new Error('Instagram embed timed out'));
+          }
+        }, INSTAGRAM_TIMEOUT_MS);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        settled = true;
+        cleanupObservers();
+        setStatus('error');
+        onErrorRef.current?.(err instanceof Error ? err : new Error(String(err)));
+      });
 
     return () => {
-      // Safely remove the widget container
-      if (embedContainer && widgetContainer.parentNode === embedContainer) {
+      cancelled = true;
+      cleanupObservers();
+      if (widgetContainer.parentNode === embedContainer) {
         embedContainer.removeChild(widgetContainer);
       }
     };
   }, [url]);
 
+  const isLoading = status === 'loading';
+
   return (
-    <div ref={containerRef} className="sm-instagram-embed">
-      {loading && (
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          minHeight: 400,
-          backgroundColor: '#fafafa',
-          borderRadius: 12,
-        }}>
-          <div style={{ color: '#666' }}>
-            Loading...
-          </div>
+    <div
+      className="sm-instagram-embed"
+      style={{
+        position: 'relative',
+        height: isLoading ? defaultHeight : undefined,
+        overflow: isLoading ? 'hidden' : undefined,
+      }}
+    >
+      {isLoading && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            zIndex: 1,
+          }}
+        >
+          <EmbedSkeleton height={defaultHeight} theme={theme} platform="instagram" />
         </div>
       )}
-      <div ref={embedRef} />
+      {status === 'error' ? (
+        <div ref={fallbackRef}>
+          <EmbedErrorFallback url={url} platform="instagram" theme={theme} />
+        </div>
+      ) : null}
+      <div
+        ref={embedRef}
+        style={{
+          opacity: status === 'loaded' ? 1 : 0,
+          transition: 'opacity 250ms ease',
+          display: status === 'error' ? 'none' : undefined,
+        }}
+      />
     </div>
   );
 };
@@ -375,6 +862,11 @@ const LazyEmbed: React.FC<LazyEmbedProps> = ({ children, rootMargin, placeholder
     const el = ref.current;
     if (!el) return;
 
+    if (typeof IntersectionObserver === 'undefined') {
+      setVisible(true);
+      return;
+    }
+
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting) {
@@ -389,84 +881,14 @@ const LazyEmbed: React.FC<LazyEmbedProps> = ({ children, rootMargin, placeholder
     return () => observer.disconnect();
   }, [rootMargin]);
 
-  return (
-    <div ref={ref}>
-      {visible ? children : placeholder}
-    </div>
-  );
+  return <div ref={ref}>{visible ? children : placeholder}</div>;
 };
-
-// ============================================
-// Layout Calculator
-// ============================================
-
-interface LayoutResult {
-  positions: Map<string, ItemPosition>;
-  containerHeight: number;
-  columnWidth: number;
-}
-
-// Max widths for embeds
-const MAX_TWITTER_WIDTH = 550;
-const MAX_INSTAGRAM_WIDTH = 540;
-const MAX_EMBED_WIDTH = 550;
-
-function calculateLayout(
-  posts: SocialPost[],
-  containerWidth: number,
-  columnCount: number,
-  gap: number,
-  itemHeights: Map<string, number>
-): LayoutResult {
-  // Calculate raw column width
-  const rawColumnWidth = (containerWidth - gap * (columnCount - 1)) / columnCount;
-  // Cap column width to max embed width
-  const columnWidth = Math.min(rawColumnWidth, MAX_EMBED_WIDTH);
-
-  // Calculate total grid width and offset for centering
-  const totalGridWidth = columnWidth * columnCount + gap * (columnCount - 1);
-  const offsetX = (containerWidth - totalGridWidth) / 2;
-
-  const columnHeights = new Array(columnCount).fill(0);
-  const positions = new Map<string, ItemPosition>();
-
-  for (const post of posts) {
-    const postId = generatePostId(post);
-    const itemHeight = itemHeights.get(postId) ??
-      (post.platform === 'twitter' ? DEFAULT_TWITTER_HEIGHT : DEFAULT_INSTAGRAM_HEIGHT);
-
-    // Find shortest column
-    const shortestColumn = columnHeights.indexOf(Math.min(...columnHeights));
-
-    // Calculate position with centering offset
-    const x = offsetX + shortestColumn * (columnWidth + gap);
-    const y = columnHeights[shortestColumn];
-
-    // Get max width for this post type
-    const maxWidth = post.platform === 'instagram' ? MAX_INSTAGRAM_WIDTH : MAX_TWITTER_WIDTH;
-    const itemWidth = Math.min(columnWidth, maxWidth);
-
-    positions.set(postId, {
-      id: postId,
-      x,
-      y,
-      width: itemWidth,
-      height: itemHeight,
-      column: shortestColumn,
-    });
-
-    // Update column height
-    columnHeights[shortestColumn] = y + itemHeight + gap;
-  }
-
-  const containerHeight = Math.max(...columnHeights.map(h => Math.max(0, h - gap)), 0);
-
-  return { positions, containerHeight, columnWidth };
-}
 
 // ============================================
 // Main Component
 // ============================================
+
+const HEIGHT_CHANGE_THRESHOLD = 2;
 
 export interface SocialMasonryRef {
   addPosts: (posts: SocialPost[]) => void;
@@ -480,14 +902,20 @@ export const SocialMasonry = forwardRef<SocialMasonryRef, SocialMasonryProps>(
     const {
       posts: initialPosts = [],
       gap = 16,
+      padding = 0,
       columns = defaultColumnConfig,
       theme = 'light',
+      twitterHeight = DEFAULT_TWITTER_HEIGHT,
+      instagramHeight = DEFAULT_INSTAGRAM_HEIGHT,
+      twitterHideCard = false,
+      twitterHideThread = true,
       animate = true,
       animationDuration = 300,
       animationEasing = 'ease-out',
       staggerDelay = 0,
       lazyLoad = false,
       lazyLoadRootMargin = '200px 0px',
+      onLayoutComplete,
       onEmbedLoad,
       onEmbedError,
       className,
@@ -499,16 +927,31 @@ export const SocialMasonry = forwardRef<SocialMasonryRef, SocialMasonryProps>(
     const [containerWidth, setContainerWidth] = useState(0);
     const [columnCount, setColumnCount] = useState(3);
     const [itemHeights, setItemHeights] = useState<Map<string, number>>(new Map());
-    const elementRefs = useRef<Map<string, HTMLElement>>(new Map());
-    const previousPositionsRef = useRef<Map<string, { x: number; y: number }>>(new Map());
-    const isAnimatingRef = useRef(false);
+    const [transitionsEnabled, setTransitionsEnabled] = useState(false);
 
-    // Update posts when initialPosts changes
+    const reducedMotion = usePrefersReducedMotion();
+
+    // Pin column assignments per columnCount so embeds never jump horizontally while loading
+    const pinnedColumnsRef = useRef<Map<string, number>>(new Map());
+    const lastColumnCountRef = useRef<number>(columnCount);
+    const lastContainerWidthRef = useRef<number>(containerWidth);
+    const knownPostIdsRef = useRef<Set<string>>(new Set());
+
+    // rAF batching for ResizeObserver height updates
+    const pendingHeightsRef = useRef<Map<string, number>>(new Map());
+    const rafIdRef = useRef<number | null>(null);
+
+    const onLayoutCompleteRef = useRef(onLayoutComplete);
+    useEffect(() => {
+      onLayoutCompleteRef.current = onLayoutComplete;
+    });
+
+    // Update posts when initialPosts prop changes
     useEffect(() => {
       setPosts(initialPosts);
     }, [initialPosts]);
 
-    // Calculate column count based on container width
+    // Track container width and responsive column count
     useEffect(() => {
       const updateSize = () => {
         if (!containerRef.current) return;
@@ -520,6 +963,8 @@ export const SocialMasonry = forwardRef<SocialMasonryRef, SocialMasonryProps>(
 
       updateSize();
 
+      if (typeof ResizeObserver === 'undefined') return;
+
       const resizeObserver = new ResizeObserver(updateSize);
       if (containerRef.current) {
         resizeObserver.observe(containerRef.current);
@@ -528,117 +973,154 @@ export const SocialMasonry = forwardRef<SocialMasonryRef, SocialMasonryProps>(
       return () => resizeObserver.disconnect();
     }, [columns]);
 
-    // Calculate layout
+    // Detect if this render is a structural relayout (columnCount or width change)
+    const isColumnCountChanged =
+      lastColumnCountRef.current !== columnCount && pinnedColumnsRef.current.size > 0;
+    const isRelayout =
+      isColumnCountChanged ||
+      (lastContainerWidthRef.current !== 0 &&
+        lastContainerWidthRef.current !== containerWidth);
+
+    // Calculate layout with column pinning (cleared automatically when columnCount changes)
     const layout = useMemo(() => {
       if (containerWidth === 0) {
-        return { positions: new Map<string, ItemPosition>(), containerHeight: 0, columnWidth: 0 };
+        return {
+          positions: new Map<string, ItemPosition>(),
+          columnHeights: [] as number[],
+          containerHeight: 0,
+          columnWidth: 0,
+          columnAssignments: new Map<string, number>(),
+        };
       }
-      return calculateLayout(posts, containerWidth, columnCount, gap, itemHeights);
-    }, [posts, containerWidth, columnCount, gap, itemHeights]);
 
-    // Handle item height changes
-    const handleHeightChange = useCallback((postId: string, height: number) => {
-      setItemHeights(prev => {
-        const next = new Map(prev);
-        next.set(postId, height);
-        return next;
+      const activePinnedColumns =
+        lastColumnCountRef.current === columnCount
+          ? pinnedColumnsRef.current
+          : undefined;
+
+      return calculateMasonryLayout({
+        posts,
+        containerWidth,
+        columnCount,
+        gap,
+        padding,
+        itemHeights,
+        twitterHeight,
+        instagramHeight,
+        pinnedColumns: activePinnedColumns,
+        constrainEmbedWidth: true,
+      });
+    }, [
+      posts,
+      containerWidth,
+      columnCount,
+      gap,
+      padding,
+      itemHeights,
+      twitterHeight,
+      instagramHeight,
+    ]);
+
+    // Commit column assignments and container metrics synchronously after layout
+    useIsomorphicLayoutEffect(() => {
+      if (containerWidth === 0) return;
+      pinnedColumnsRef.current = layout.columnAssignments;
+      lastColumnCountRef.current = columnCount;
+      lastContainerWidthRef.current = containerWidth;
+    }, [layout, columnCount, containerWidth]);
+
+    // Enable CSS transitions only after initial layout has painted (prevents fly-in from 0,0)
+    useEffect(() => {
+      if (transitionsEnabled || layout.positions.size === 0) return;
+      const id = requestAnimationFrame(() => {
+        setTransitionsEnabled(true);
+      });
+      return () => cancelAnimationFrame(id);
+    }, [transitionsEnabled, layout.positions.size]);
+
+    // Track known post IDs and fire onLayoutComplete callback
+    useEffect(() => {
+      if (layout.positions.size === 0) return;
+
+      knownPostIdsRef.current = new Set(layout.positions.keys());
+      onLayoutCompleteRef.current?.(Array.from(layout.positions.values()));
+    }, [layout]);
+
+    // Cancel any queued height rAF on unmount
+    useEffect(() => {
+      return () => {
+        if (rafIdRef.current !== null) {
+          cancelAnimationFrame(rafIdRef.current);
+          rafIdRef.current = null;
+        }
+      };
+    }, []);
+
+    // Batched height change handler (coalesces multiple ResizeObserver ticks per frame)
+    const handleHeightChange = useCallback((postId: string, rawHeight: number) => {
+      const height = Math.round(rawHeight);
+      if (height <= 0) return;
+
+      pendingHeightsRef.current.set(postId, height);
+
+      if (rafIdRef.current !== null) return;
+
+      rafIdRef.current = requestAnimationFrame(() => {
+        rafIdRef.current = null;
+        const updates = pendingHeightsRef.current;
+        if (updates.size === 0) return;
+
+        setItemHeights((prev) => {
+          let changed = false;
+          const next = new Map(prev);
+
+          updates.forEach((nextHeight, id) => {
+            const currentHeight = prev.get(id);
+            if (
+              currentHeight === undefined ||
+              Math.abs(currentHeight - nextHeight) >= HEIGHT_CHANGE_THRESHOLD
+            ) {
+              next.set(id, nextHeight);
+              changed = true;
+            }
+          });
+
+          return changed ? next : prev;
+        });
+
+        updates.clear();
       });
     }, []);
 
-    // Apply FLIP animation when layout changes
-    useEffect(() => {
-      if (!animate || prefersReducedMotion() || isAnimatingRef.current) return;
-      if (previousPositionsRef.current.size === 0) {
-        // Store initial positions
-        layout.positions.forEach((pos, id) => {
-          previousPositionsRef.current.set(id, { x: pos.x, y: pos.y });
-        });
-        return;
-      }
-
-      isAnimatingRef.current = true;
-      let animationIndex = 0;
-
-      elementRefs.current.forEach((el, id) => {
-        const prevPos = previousPositionsRef.current.get(id);
-        const newPos = layout.positions.get(id);
-
-        if (!newPos) return;
-
-        if (!prevPos) {
-          // New element - fade in
-          el.style.opacity = '0';
-          el.style.transform = `translate(${newPos.x}px, ${newPos.y}px) scale(0.95)`;
-          const delay = animationIndex * staggerDelay;
-
-          requestAnimationFrame(() => {
-            el.style.transition = `opacity ${animationDuration}ms ${animationEasing} ${delay}ms, transform ${animationDuration}ms ${animationEasing} ${delay}ms`;
-            el.style.opacity = '1';
-            el.style.transform = `translate(${newPos.x}px, ${newPos.y}px) scale(1)`;
+    // Expose imperative methods via ref
+    useImperativeHandle(
+      ref,
+      () => ({
+        addPosts: (newPosts: SocialPost[]) => {
+          setPosts((prev) => [...prev, ...newPosts]);
+        },
+        setPosts: (newPosts: SocialPost[]) => {
+          pinnedColumnsRef.current = new Map();
+          setPosts(newPosts);
+        },
+        removePost: (id: string) => {
+          setPosts((prev) => prev.filter((p) => generatePostId(p) !== id));
+          setItemHeights((prev) => {
+            if (!prev.has(id)) return prev;
+            const next = new Map(prev);
+            next.delete(id);
+            return next;
           });
+        },
+        refresh: () => {
+          const instgrm = (window as EmbedWindow).instgrm;
+          instgrm?.Embeds?.process();
+        },
+      }),
+      []
+    );
 
-          animationIndex++;
-          return;
-        }
-
-        // Calculate movement
-        const deltaX = prevPos.x - newPos.x;
-        const deltaY = prevPos.y - newPos.y;
-
-        // Skip if no significant movement
-        if (Math.abs(deltaX) < 1 && Math.abs(deltaY) < 1) {
-          el.style.transform = `translate(${newPos.x}px, ${newPos.y}px)`;
-          animationIndex++;
-          return;
-        }
-
-        // FLIP: Start from old position
-        el.style.transition = 'none';
-        el.style.transform = `translate(${prevPos.x}px, ${prevPos.y}px)`;
-
-        // Force reflow
-        void el.offsetHeight;
-
-        // Animate to new position
-        const delay = animationIndex * staggerDelay;
-        requestAnimationFrame(() => {
-          el.style.transition = `transform ${animationDuration}ms ${animationEasing} ${delay}ms`;
-          el.style.transform = `translate(${newPos.x}px, ${newPos.y}px)`;
-        });
-
-        animationIndex++;
-      });
-
-      // Update stored positions after animation
-      const totalDuration = animationDuration + (elementRefs.current.size * staggerDelay);
-      setTimeout(() => {
-        layout.positions.forEach((pos, id) => {
-          previousPositionsRef.current.set(id, { x: pos.x, y: pos.y });
-        });
-        isAnimatingRef.current = false;
-      }, totalDuration);
-
-    }, [layout, animate, animationDuration, animationEasing, staggerDelay]);
-
-    // Expose methods via ref
-    useImperativeHandle(ref, () => ({
-      addPosts: (newPosts: SocialPost[]) => {
-        setPosts(prev => [...prev, ...newPosts]);
-      },
-      setPosts: (newPosts: SocialPost[]) => {
-        setPosts(newPosts);
-      },
-      removePost: (id: string) => {
-        setPosts(prev => prev.filter(p => generatePostId(p) !== id));
-      },
-      refresh: () => {
-        // Re-process embeds
-        const instgrm = (window as Window & { instgrm?: { Embeds: { process: () => void } } }).instgrm;
-        if (instgrm) {
-          instgrm.Embeds.process();
-        }
-      },
-    }), []);
+    const shouldAnimate = animate && !reducedMotion && transitionsEnabled;
 
     return (
       <div
@@ -649,36 +1131,42 @@ export const SocialMasonry = forwardRef<SocialMasonryRef, SocialMasonryProps>(
           width: '100%',
           minHeight: posts.length > 0 ? 200 : undefined,
           height: layout.containerHeight || undefined,
+          transition: shouldAnimate
+            ? `height ${animationDuration}ms ${animationEasing}`
+            : undefined,
           ...style,
         }}
       >
-        {posts.map(post => {
+        {posts.map((post, index) => {
           const postId = generatePostId(post);
           const position = layout.positions.get(postId);
+          const isNewPost =
+            transitionsEnabled && !knownPostIdsRef.current.has(postId);
 
-          const setRef = (el: HTMLDivElement | null) => {
-            if (el) {
-              elementRefs.current.set(postId, el);
-            } else {
-              elementRefs.current.delete(postId);
-            }
-          };
+          // Apply stagger delay only on structural relayouts (column/width changes),
+          // not on individual embed height settling
+          const delay = isRelayout ? index * staggerDelay : 0;
 
-          // Before layout is calculated, hide items but keep them in DOM
-          const itemStyle: React.CSSProperties = position ? {
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            width: position.width,
-            transform: `translate(${position.x}px, ${position.y}px)`,
-            willChange: animate ? 'transform' : undefined,
-          } : {
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            opacity: 0,
-            pointerEvents: 'none',
-          };
+          const itemStyle: React.CSSProperties = position
+            ? {
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                width: position.width,
+                transform: `translate3d(${position.x}px, ${position.y}px, 0)`,
+                transition:
+                  shouldAnimate && !isNewPost
+                    ? `transform ${animationDuration}ms ${animationEasing} ${delay}ms`
+                    : 'none',
+                willChange: animate && !reducedMotion ? 'transform' : undefined,
+              }
+            : {
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                opacity: 0,
+                pointerEvents: 'none',
+              };
 
           let embedContent: React.ReactNode = null;
           let embedClassName = '';
@@ -686,11 +1174,14 @@ export const SocialMasonry = forwardRef<SocialMasonryRef, SocialMasonryProps>(
 
           if (post.platform === 'twitter') {
             embedClassName = 'sm-embed sm-embed--twitter';
-            defaultHeight = DEFAULT_TWITTER_HEIGHT;
+            defaultHeight = itemHeights.get(postId) ?? twitterHeight;
             embedContent = (
               <TwitterEmbed
                 url={post.url}
                 theme={theme}
+                defaultHeight={defaultHeight}
+                hideCard={twitterHideCard}
+                hideThread={twitterHideThread}
                 onLoad={() => onEmbedLoad?.(post)}
                 onError={(error) => onEmbedError?.(post, error)}
                 onHeightChange={(h) => handleHeightChange(postId, h)}
@@ -698,10 +1189,12 @@ export const SocialMasonry = forwardRef<SocialMasonryRef, SocialMasonryProps>(
             );
           } else if (post.platform === 'instagram') {
             embedClassName = 'sm-embed sm-embed--instagram';
-            defaultHeight = DEFAULT_INSTAGRAM_HEIGHT;
+            defaultHeight = itemHeights.get(postId) ?? instagramHeight;
             embedContent = (
               <InstagramEmbed
                 url={post.url}
+                theme={theme}
+                defaultHeight={defaultHeight}
                 onLoad={() => onEmbedLoad?.(post)}
                 onError={(error) => onEmbedError?.(post, error)}
                 onHeightChange={(h) => handleHeightChange(postId, h)}
@@ -715,31 +1208,21 @@ export const SocialMasonry = forwardRef<SocialMasonryRef, SocialMasonryProps>(
             <LazyEmbed
               rootMargin={lazyLoadRootMargin}
               placeholder={
-                <div style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  minHeight: defaultHeight,
-                  backgroundColor: theme === 'dark' ? '#15202b' : '#f5f5f5',
-                  borderRadius: 12,
-                }}>
-                  <div style={{ color: theme === 'dark' ? '#8899a6' : '#666' }}>
-                    Loading...
-                  </div>
-                </div>
+                <EmbedSkeleton
+                  height={defaultHeight}
+                  theme={theme}
+                  platform={post.platform}
+                />
               }
             >
               {embedContent}
             </LazyEmbed>
-          ) : embedContent;
+          ) : (
+            embedContent
+          );
 
           return (
-            <div
-              key={postId}
-              ref={setRef}
-              className={embedClassName}
-              style={itemStyle}
-            >
+            <div key={postId} className={embedClassName} style={itemStyle}>
               {wrappedContent}
             </div>
           );
