@@ -607,6 +607,7 @@ const TwitterEmbed: React.FC<TwitterEmbedProps> = ({
 // Instagram Embed Component
 // ============================================
 
+const INSTAGRAM_MIN_WIDTH = 326;
 const INSTAGRAM_MIN_RENDERED_HEIGHT = 150;
 const INSTAGRAM_SETTLE_DELAY_MS = 120;
 const INSTAGRAM_TIMEOUT_MS = 8000;
@@ -615,6 +616,7 @@ interface InstagramEmbedProps {
   url: string;
   theme?: 'light' | 'dark';
   defaultHeight: number;
+  width?: number;
   onLoad?: () => void;
   onError?: (error: Error) => void;
   onHeightChange?: (height: number) => void;
@@ -624,6 +626,7 @@ const InstagramEmbed: React.FC<InstagramEmbedProps> = ({
   url,
   theme = 'light',
   defaultHeight,
+  width,
   onLoad,
   onError,
   onHeightChange,
@@ -631,6 +634,15 @@ const InstagramEmbed: React.FC<InstagramEmbedProps> = ({
   const embedRef = useRef<HTMLDivElement>(null);
   const fallbackRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<'loading' | 'loaded' | 'error'>('loading');
+  const [rawHeight, setRawHeight] = useState<number>(0);
+
+  // Instagram's embed.js enforces min-width: 326px on its rendered iframe.
+  // Scale down proportionally when placed in a narrower column so it never overlaps neighbors.
+  const scale =
+    width && width > 0 && width < INSTAGRAM_MIN_WIDTH
+      ? width / INSTAGRAM_MIN_WIDTH
+      : 1;
+  const isScaled = scale < 1;
 
   // Store callbacks in refs to avoid re-running effects
   const onLoadRef = useRef(onLoad);
@@ -650,29 +662,31 @@ const InstagramEmbed: React.FC<InstagramEmbedProps> = ({
     const target = status === 'loaded' ? embedRef.current : fallbackRef.current;
     if (!target) return;
 
-    const measure = () => {
-      const rectHeight = target.getBoundingClientRect().height;
-      if (rectHeight > 0) {
-        onHeightChangeRef.current?.(rectHeight);
+    const reportHeight = (unscaledHeight: number) => {
+      if (unscaledHeight <= 0) return;
+      if (status === 'loaded') {
+        setRawHeight((prev) =>
+          Math.abs(prev - unscaledHeight) >= 1 ? unscaledHeight : prev
+        );
+        onHeightChangeRef.current?.(Math.round(unscaledHeight * scale));
+      } else {
+        onHeightChangeRef.current?.(Math.round(unscaledHeight));
       }
     };
 
-    measure();
+    reportHeight(target.offsetHeight || target.getBoundingClientRect().height);
 
     if (typeof ResizeObserver === 'undefined') return;
 
     const resizeObserver = new ResizeObserver((entries) => {
       for (const entry of entries) {
-        const height = entry.contentRect.height;
-        if (height > 0) {
-          onHeightChangeRef.current?.(height);
-        }
+        reportHeight(entry.contentRect.height);
       }
     });
 
     resizeObserver.observe(target);
     return () => resizeObserver.disconnect();
-  }, [status]);
+  }, [status, scale]);
 
   useEffect(() => {
     const embedContainer = embedRef.current;
@@ -686,6 +700,7 @@ const InstagramEmbed: React.FC<InstagramEmbedProps> = ({
     let probeResizeObserver: ResizeObserver | null = null;
 
     setStatus('loading');
+    setRawHeight(0);
 
     const match = url.match(/(?:instagram\.com|instagr\.am)\/(p|reel|reels|tv)\/([A-Za-z0-9_-]+)/);
     if (!match) {
@@ -749,7 +764,7 @@ const InstagramEmbed: React.FC<InstagramEmbedProps> = ({
       const iframe = widgetContainer.querySelector('iframe');
       if (!iframe) return;
 
-      const iframeHeight = iframe.getBoundingClientRect().height;
+      const iframeHeight = iframe.offsetHeight || iframe.getBoundingClientRect().height;
       if (iframeHeight >= INSTAGRAM_MIN_RENDERED_HEIGHT) {
         // Wait briefly for Instagram's postMessage height adjustment to settle
         if (settleTimer) clearTimeout(settleTimer);
@@ -780,7 +795,10 @@ const InstagramEmbed: React.FC<InstagramEmbedProps> = ({
         timeoutTimer = setTimeout(() => {
           if (cancelled || settled) return;
           const iframe = widgetContainer.querySelector('iframe');
-          if (iframe && iframe.getBoundingClientRect().height > 0) {
+          const iframeHeight = iframe
+            ? iframe.offsetHeight || iframe.getBoundingClientRect().height
+            : 0;
+          if (iframeHeight > 0) {
             markLoaded();
           } else {
             settled = true;
@@ -808,14 +826,20 @@ const InstagramEmbed: React.FC<InstagramEmbedProps> = ({
   }, [url]);
 
   const isLoading = status === 'loading';
+  const scaledHeight =
+    status === 'loaded' && isScaled && rawHeight > 0
+      ? Math.round(rawHeight * scale)
+      : undefined;
 
   return (
     <div
       className="sm-instagram-embed"
       style={{
         position: 'relative',
-        height: isLoading ? defaultHeight : undefined,
-        overflow: isLoading ? 'hidden' : undefined,
+        width: '100%',
+        height: isLoading ? defaultHeight : scaledHeight,
+        overflow: isLoading || isScaled ? 'hidden' : undefined,
+        borderRadius: isScaled ? 12 : undefined,
       }}
     >
       {isLoading && (
@@ -842,6 +866,9 @@ const InstagramEmbed: React.FC<InstagramEmbedProps> = ({
           opacity: status === 'loaded' ? 1 : 0,
           transition: 'opacity 250ms ease',
           display: status === 'error' ? 'none' : undefined,
+          width: isScaled ? INSTAGRAM_MIN_WIDTH : '100%',
+          transform: isScaled ? `scale(${scale})` : undefined,
+          transformOrigin: isScaled ? 'top left' : undefined,
         }}
       />
     </div>
@@ -1208,6 +1235,7 @@ export const SocialMasonry = forwardRef<SocialMasonryRef, SocialMasonryProps>(
                 url={post.url}
                 theme={theme}
                 defaultHeight={defaultHeight}
+                width={position?.width}
                 onLoad={() => onEmbedLoad?.(post)}
                 onError={(error) => onEmbedError?.(post, error)}
                 onHeightChange={(h) => handleHeightChange(postId, h)}

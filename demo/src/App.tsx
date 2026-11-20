@@ -158,7 +158,7 @@ yarn add social-masonry`;
         <div className="hero-content">
           <div className="badge">
             <span className="badge-dot" />
-            v1.3.0 — Zero-Jank Loading &amp; URL-Only API
+            v1.3.1 — Zero-Jank Loading &amp; URL-Only API
           </div>
           <h1>Drop-in Social Wall for React &amp; Next.js</h1>
           <p className="hero-description">
