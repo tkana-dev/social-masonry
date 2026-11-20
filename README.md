@@ -8,7 +8,7 @@
   [![license](https://img.shields.io/npm/l/social-masonry.svg)](https://github.com/tkana-dev/social-masonry/blob/main/LICENSE)
   [![TypeScript](https://img.shields.io/badge/TypeScript-Ready-blue.svg)](https://www.typescriptlang.org/)
 
-  <h3><a href="https://tkana.dev/social-masonry/">Try the Interactive Playground →</a></h3>
+  <h3><a href="https://social-masonry.tkana.dev/">Try the Interactive Playground →</a></h3>
 </div>
 
 ---
