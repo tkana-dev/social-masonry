@@ -9,6 +9,12 @@
   [![TypeScript](https://img.shields.io/badge/TypeScript-Ready-blue.svg)](https://www.typescriptlang.org/)
 
   <h3><a href="https://social-masonry.tkana.dev/">Try the Interactive Playground →</a></h3>
+
+  <br />
+
+  <a href="https://social-masonry.tkana.dev/">
+    <img src="https://raw.githubusercontent.com/tkana-dev/social-masonry/main/assets/demo.gif" alt="Social Masonry live demo showing responsive column transitions and theme switching" width="100%" />
+  </a>
 </div>
 
 ---
