@@ -7,15 +7,134 @@ import type {
   ItemPosition,
   LayoutState,
   MasonryConfig,
-  SocialPost,
+  SocialPostInput,
 } from './types';
 import {
   defaultColumnConfig,
   getColumnCount,
   generatePostId,
+  normalizePosts,
   DEFAULT_TWITTER_HEIGHT,
   DEFAULT_INSTAGRAM_HEIGHT,
 } from './utils';
+
+export const MAX_TWITTER_WIDTH = 550;
+export const MAX_INSTAGRAM_WIDTH = 540;
+export const MAX_EMBED_WIDTH = 550;
+
+export interface CalculateLayoutOptions {
+  posts: SocialPostInput[];
+  containerWidth: number;
+  columnCount: number;
+  gap?: number;
+  padding?: number;
+  itemHeights: Map<string, number>;
+  twitterHeight?: number;
+  instagramHeight?: number;
+  /**
+   * Previously assigned column indices keyed by post ID.
+   * When provided, existing posts stay in their assigned column (as long as it is
+   * still within `0..columnCount - 1`) instead of jumping horizontally when heights change.
+   */
+  pinnedColumns?: Map<string, number>;
+  /**
+   * Cap column width to platform max embed widths and center the grid (default: true).
+   */
+  constrainEmbedWidth?: boolean;
+}
+
+export interface CalculateLayoutResult extends LayoutState {
+  columnAssignments: Map<string, number>;
+}
+
+/**
+ * Calculate masonry layout positions with optional column pinning.
+ * Pinning prevents cards from jumping sideways across columns while embeds load.
+ */
+export function calculateMasonryLayout(
+  options: CalculateLayoutOptions
+): CalculateLayoutResult {
+  const {
+    posts,
+    containerWidth,
+    columnCount,
+    gap = 16,
+    padding = 0,
+    itemHeights,
+    twitterHeight = DEFAULT_TWITTER_HEIGHT,
+    instagramHeight = DEFAULT_INSTAGRAM_HEIGHT,
+    pinnedColumns,
+    constrainEmbedWidth = true,
+  } = options;
+
+  const normalizedPosts = normalizePosts(posts);
+  const safeColumnCount = Math.max(1, columnCount);
+  const availableWidth = Math.max(0, containerWidth - padding * 2);
+  const totalGapWidth = gap * (safeColumnCount - 1);
+  const rawColumnWidth = Math.max(0, (availableWidth - totalGapWidth) / safeColumnCount);
+  const columnWidth = constrainEmbedWidth
+    ? Math.min(rawColumnWidth, MAX_EMBED_WIDTH)
+    : rawColumnWidth;
+
+  const totalGridWidth = columnWidth * safeColumnCount + totalGapWidth;
+  const offsetX = padding + Math.max(0, (availableWidth - totalGridWidth) / 2);
+
+  const columnHeights = new Array<number>(safeColumnCount).fill(0);
+  const positions = new Map<string, ItemPosition>();
+  const columnAssignments = new Map<string, number>();
+
+  for (const post of normalizedPosts) {
+    const postId = generatePostId(post);
+    const defaultHeight =
+      post.estimatedHeight ??
+      (post.platform === 'instagram' ? instagramHeight : twitterHeight);
+    const itemHeight = itemHeights.get(postId) ?? defaultHeight;
+
+    // Keep existing column assignment if valid for current columnCount;
+    // otherwise place in the currently shortest column.
+    const pinnedColumn = pinnedColumns?.get(postId);
+    const targetColumn =
+      pinnedColumn !== undefined && pinnedColumn >= 0 && pinnedColumn < safeColumnCount
+        ? pinnedColumn
+        : columnHeights.indexOf(Math.min(...columnHeights));
+
+    columnAssignments.set(postId, targetColumn);
+
+    const x = offsetX + targetColumn * (columnWidth + gap);
+    const y = columnHeights[targetColumn];
+
+    const itemWidth = constrainEmbedWidth
+      ? Math.min(
+          columnWidth,
+          post.platform === 'instagram' ? MAX_INSTAGRAM_WIDTH : MAX_TWITTER_WIDTH
+        )
+      : columnWidth;
+
+    positions.set(postId, {
+      id: postId,
+      x,
+      y,
+      width: itemWidth,
+      height: itemHeight,
+      column: targetColumn,
+    });
+
+    columnHeights[targetColumn] = y + itemHeight + gap;
+  }
+
+  const containerHeight = Math.max(
+    ...columnHeights.map((h) => Math.max(0, h - gap)),
+    0
+  );
+
+  return {
+    positions,
+    columnHeights,
+    containerHeight,
+    columnWidth,
+    columnAssignments,
+  };
+}
 
 export interface LayoutEngineOptions extends MasonryConfig {
   containerWidth: number;
@@ -27,6 +146,8 @@ export interface LayoutEngineOptions extends MasonryConfig {
 export class LayoutEngine {
   private options: Required<LayoutEngineOptions>;
   private state: LayoutState;
+  private pinnedColumns: Map<string, number>;
+  private lastColumnCount: number;
 
   constructor(options: LayoutEngineOptions) {
     this.options = {
@@ -50,73 +171,50 @@ export class LayoutEngine {
       containerHeight: 0,
       columnWidth: 0,
     };
+    this.pinnedColumns = new Map();
+    this.lastColumnCount = 0;
   }
 
   /**
    * Calculate layout for all posts
    */
-  calculate(posts: SocialPost[]): LayoutState {
-    const { containerWidth, itemHeights, gap, padding } = this.options;
+  calculate(posts: SocialPostInput[]): LayoutState {
+    const columnCount = getColumnCount(this.options.columns, this.options.containerWidth);
 
-    // Calculate column count and width
-    const columnCount = getColumnCount(this.options.columns, containerWidth);
-    const availableWidth = containerWidth - padding * 2;
-    const totalGapWidth = gap * (columnCount - 1);
-    const columnWidth = (availableWidth - totalGapWidth) / columnCount;
-
-    // Initialize column heights
-    const columnHeights = new Array(columnCount).fill(0);
-    const positions = new Map<string, ItemPosition>();
-
-    // Place each item in the shortest column
-    for (const post of posts) {
-      const postId = generatePostId(post);
-      const itemHeight = itemHeights.get(postId) ?? this.getDefaultHeight(post);
-
-      // Find shortest column
-      const shortestColumn = columnHeights.indexOf(Math.min(...columnHeights));
-
-      // Calculate position
-      const x = padding + shortestColumn * (columnWidth + gap);
-      const y = columnHeights[shortestColumn];
-
-      positions.set(postId, {
-        id: postId,
-        x,
-        y,
-        width: columnWidth,
-        height: itemHeight,
-        column: shortestColumn,
-      });
-
-      // Update column height
-      columnHeights[shortestColumn] = y + itemHeight + gap;
+    if (columnCount !== this.lastColumnCount) {
+      this.pinnedColumns.clear();
+      this.lastColumnCount = columnCount;
     }
 
-    // Remove last gap from column heights
-    const containerHeight = Math.max(...columnHeights.map(h => h - gap), 0);
+    const result = calculateMasonryLayout({
+      posts,
+      containerWidth: this.options.containerWidth,
+      columnCount,
+      gap: this.options.gap,
+      padding: this.options.padding,
+      itemHeights: this.options.itemHeights,
+      twitterHeight: this.options.twitterHeight,
+      instagramHeight: this.options.instagramHeight,
+      pinnedColumns: this.pinnedColumns,
+      constrainEmbedWidth: false,
+    });
 
+    this.pinnedColumns = result.columnAssignments;
     this.state = {
-      positions,
-      columnHeights,
-      containerHeight,
-      columnWidth,
+      positions: result.positions,
+      columnHeights: result.columnHeights,
+      containerHeight: result.containerHeight,
+      columnWidth: result.columnWidth,
     };
 
     return this.state;
   }
 
   /**
-   * Get default height for embed based on platform
+   * Clear pinned column assignments to force full rebalancing on next calculate()
    */
-  private getDefaultHeight(post: SocialPost): number {
-    if (post.platform === 'twitter') {
-      return this.options.twitterHeight;
-    }
-    if (post.platform === 'instagram') {
-      return this.options.instagramHeight;
-    }
-    return DEFAULT_TWITTER_HEIGHT;
+  clearPinnedColumns(): void {
+    this.pinnedColumns.clear();
   }
 
   /**

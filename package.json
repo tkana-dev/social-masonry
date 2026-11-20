@@ -1,8 +1,8 @@
 {
   "name": "social-masonry",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "type": "module",
-  "description": "Beautiful masonry layout for X (Twitter) and Instagram embeds with virtualization support",
+  "description": "Zero-jank masonry layout for X (Twitter) and Instagram embeds — React & Next.js ready",
   "main": "dist/index.js",
   "module": "dist/index.esm.js",
   "types": "dist/index.d.ts",
@@ -37,12 +37,15 @@
     "x",
     "instagram",
     "social-media",
+    "social-wall",
+    "wall-of-love",
     "embed",
     "layout",
     "grid",
     "react",
-    "virtualization",
-    "infinite-scroll"
+    "nextjs",
+    "typescript",
+    "lazy-loading"
   ],
   "author": "tkana",
   "license": "MIT",
@@ -50,7 +53,7 @@
     "type": "git",
     "url": "https://github.com/tkana-dev/social-masonry"
   },
-  "homepage": "https://tkana.dev/social-masonry/",
+  "homepage": "https://social-masonry.tkana.dev/",
   "bugs": {
     "url": "https://github.com/tkana-dev/social-masonry/issues"
   },

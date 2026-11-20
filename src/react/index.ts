@@ -7,6 +7,7 @@ export type { SocialMasonryRef } from './SocialMasonry';
 export type {
   SocialMasonryProps,
   SocialPost,
+  SocialPostInput,
   SocialPlatform,
   MasonryConfig,
   EmbedConfig,
