@@ -162,6 +162,23 @@ describe('calculateMasonryLayout', () => {
     expect(result.positions.get('ig')?.height).toBe(450);
     expect(result.containerHeight).toBe(450);
   });
+
+  it('accepts plain URL strings and respects post.estimatedHeight', () => {
+    const result = calculateMasonryLayout({
+      posts: [
+        'https://x.com/user/status/111',
+        { url: 'https://www.instagram.com/p/XYZ/', estimatedHeight: 720 },
+      ],
+      containerWidth: 640,
+      columnCount: 2,
+      gap: 16,
+      itemHeights: new Map(),
+    });
+
+    expect(result.positions.get('tw-111')?.column).toBe(0);
+    expect(result.positions.get('ig-XYZ')?.height).toBe(720);
+    expect(result.containerHeight).toBe(720);
+  });
 });
 
 describe('LayoutEngine', () => {

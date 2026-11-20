@@ -7,12 +7,13 @@ import type {
   ItemPosition,
   LayoutState,
   MasonryConfig,
-  SocialPost,
+  SocialPostInput,
 } from './types';
 import {
   defaultColumnConfig,
   getColumnCount,
   generatePostId,
+  normalizePosts,
   DEFAULT_TWITTER_HEIGHT,
   DEFAULT_INSTAGRAM_HEIGHT,
 } from './utils';
@@ -22,7 +23,7 @@ export const MAX_INSTAGRAM_WIDTH = 540;
 export const MAX_EMBED_WIDTH = 550;
 
 export interface CalculateLayoutOptions {
-  posts: SocialPost[];
+  posts: SocialPostInput[];
   containerWidth: number;
   columnCount: number;
   gap?: number;
@@ -66,6 +67,7 @@ export function calculateMasonryLayout(
     constrainEmbedWidth = true,
   } = options;
 
+  const normalizedPosts = normalizePosts(posts);
   const safeColumnCount = Math.max(1, columnCount);
   const availableWidth = Math.max(0, containerWidth - padding * 2);
   const totalGapWidth = gap * (safeColumnCount - 1);
@@ -81,10 +83,11 @@ export function calculateMasonryLayout(
   const positions = new Map<string, ItemPosition>();
   const columnAssignments = new Map<string, number>();
 
-  for (const post of posts) {
+  for (const post of normalizedPosts) {
     const postId = generatePostId(post);
     const defaultHeight =
-      post.platform === 'instagram' ? instagramHeight : twitterHeight;
+      post.estimatedHeight ??
+      (post.platform === 'instagram' ? instagramHeight : twitterHeight);
     const itemHeight = itemHeights.get(postId) ?? defaultHeight;
 
     // Keep existing column assignment if valid for current columnCount;
@@ -175,7 +178,7 @@ export class LayoutEngine {
   /**
    * Calculate layout for all posts
    */
-  calculate(posts: SocialPost[]): LayoutState {
+  calculate(posts: SocialPostInput[]): LayoutState {
     const columnCount = getColumnCount(this.options.columns, this.options.containerWidth);
 
     if (columnCount !== this.lastColumnCount) {

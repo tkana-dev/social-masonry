@@ -17,6 +17,7 @@ import React, {
 import type {
   SocialMasonryProps,
   SocialPost,
+  SocialPostInput,
   SocialPlatform,
   ItemPosition,
 } from '../types';
@@ -25,6 +26,7 @@ import {
   extractTweetId,
   generatePostId,
   getColumnCount,
+  normalizePosts,
   DEFAULT_TWITTER_HEIGHT,
   DEFAULT_INSTAGRAM_HEIGHT,
 } from '../utils';
@@ -685,14 +687,16 @@ const InstagramEmbed: React.FC<InstagramEmbedProps> = ({
 
     setStatus('loading');
 
-    const match = url.match(/instagram\.com\/(p|reel)\/([A-Za-z0-9_-]+)/);
+    const match = url.match(/(?:instagram\.com|instagr\.am)\/(p|reel|reels|tv)\/([A-Za-z0-9_-]+)/);
     if (!match) {
       setStatus('error');
       onErrorRef.current?.(new Error('Invalid Instagram URL'));
       return;
     }
 
-    const [, postType, postId] = match;
+    const rawType = match[1];
+    const postType = rawType === 'reels' ? 'reel' : rawType;
+    const postId = match[2];
 
     const widgetContainer = document.createElement('div');
     widgetContainer.innerHTML = `
@@ -891,11 +895,13 @@ const LazyEmbed: React.FC<LazyEmbedProps> = ({ children, rootMargin, placeholder
 const HEIGHT_CHANGE_THRESHOLD = 2;
 
 export interface SocialMasonryRef {
-  addPosts: (posts: SocialPost[]) => void;
-  setPosts: (posts: SocialPost[]) => void;
+  addPosts: (posts: SocialPostInput[]) => void;
+  setPosts: (posts: SocialPostInput[]) => void;
   removePost: (id: string) => void;
   refresh: () => void;
 }
+
+type NormalizedSocialPost = SocialPost & { platform: SocialPlatform };
 
 export const SocialMasonry = forwardRef<SocialMasonryRef, SocialMasonryProps>(
   (props, ref) => {
@@ -923,7 +929,9 @@ export const SocialMasonry = forwardRef<SocialMasonryRef, SocialMasonryProps>(
     } = props;
 
     const containerRef = useRef<HTMLDivElement>(null);
-    const [posts, setPosts] = useState<SocialPost[]>(initialPosts);
+    const [posts, setPosts] = useState<NormalizedSocialPost[]>(() =>
+      normalizePosts(initialPosts)
+    );
     const [containerWidth, setContainerWidth] = useState(0);
     const [columnCount, setColumnCount] = useState(3);
     const [itemHeights, setItemHeights] = useState<Map<string, number>>(new Map());
@@ -948,7 +956,7 @@ export const SocialMasonry = forwardRef<SocialMasonryRef, SocialMasonryProps>(
 
     // Update posts when initialPosts prop changes
     useEffect(() => {
-      setPosts(initialPosts);
+      setPosts(normalizePosts(initialPosts));
     }, [initialPosts]);
 
     // Track container width and responsive column count
@@ -1096,12 +1104,15 @@ export const SocialMasonry = forwardRef<SocialMasonryRef, SocialMasonryProps>(
     useImperativeHandle(
       ref,
       () => ({
-        addPosts: (newPosts: SocialPost[]) => {
-          setPosts((prev) => [...prev, ...newPosts]);
+        addPosts: (newPosts: SocialPostInput[]) => {
+          const normalized = normalizePosts(newPosts);
+          if (normalized.length > 0) {
+            setPosts((prev) => [...prev, ...normalized]);
+          }
         },
-        setPosts: (newPosts: SocialPost[]) => {
+        setPosts: (newPosts: SocialPostInput[]) => {
           pinnedColumnsRef.current = new Map();
-          setPosts(newPosts);
+          setPosts(normalizePosts(newPosts));
         },
         removePost: (id: string) => {
           setPosts((prev) => prev.filter((p) => generatePostId(p) !== id));
@@ -1174,7 +1185,8 @@ export const SocialMasonry = forwardRef<SocialMasonryRef, SocialMasonryProps>(
 
           if (post.platform === 'twitter') {
             embedClassName = 'sm-embed sm-embed--twitter';
-            defaultHeight = itemHeights.get(postId) ?? twitterHeight;
+            defaultHeight =
+              itemHeights.get(postId) ?? post.estimatedHeight ?? twitterHeight;
             embedContent = (
               <TwitterEmbed
                 url={post.url}
@@ -1189,7 +1201,8 @@ export const SocialMasonry = forwardRef<SocialMasonryRef, SocialMasonryProps>(
             );
           } else if (post.platform === 'instagram') {
             embedClassName = 'sm-embed sm-embed--instagram';
-            defaultHeight = itemHeights.get(postId) ?? instagramHeight;
+            defaultHeight =
+              itemHeights.get(postId) ?? post.estimatedHeight ?? instagramHeight;
             embedContent = (
               <InstagramEmbed
                 url={post.url}

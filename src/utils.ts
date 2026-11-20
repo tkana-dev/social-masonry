@@ -2,18 +2,23 @@
  * Social Masonry - Utility Functions
  */
 
-import type { ColumnConfig, SocialPost, SocialPlatform } from './types';
+import type { ColumnConfig, SocialPost, SocialPostInput, SocialPlatform } from './types';
 
 // ============================================
 // URL Parsing Utilities
 // ============================================
+
+const TWITTER_URL_REGEX =
+  /(?:(?:mobile\.)?(?:twitter\.com|x\.com))\/(?:i\/web|[\w-]+)\/status\/(\d+)/;
+const INSTAGRAM_URL_REGEX =
+  /(?:instagram\.com|instagr\.am)\/(?:p|reel|reels|tv)\/([A-Za-z0-9_-]+)/;
 
 /**
  * Extract tweet ID from Twitter/X URL
  */
 export function extractTweetId(url: string): string | null {
   if (!url) return null;
-  const match = url.match(/(?:twitter\.com|x\.com)\/\w+\/status\/(\d+)/);
+  const match = url.match(TWITTER_URL_REGEX);
   return match ? match[1] : null;
 }
 
@@ -22,7 +27,7 @@ export function extractTweetId(url: string): string | null {
  */
 export function extractInstagramId(url: string): string | null {
   if (!url) return null;
-  const match = url.match(/instagram\.com\/(?:p|reel)\/([A-Za-z0-9_-]+)/);
+  const match = url.match(INSTAGRAM_URL_REGEX);
   return match ? match[1] : null;
 }
 
@@ -30,13 +35,55 @@ export function extractInstagramId(url: string): string | null {
  * Detect platform from URL
  */
 export function detectPlatform(url: string): SocialPlatform | null {
-  if (/(?:twitter\.com|x\.com)\/\w+\/status\/\d+/.test(url)) {
+  if (!url) return null;
+  if (TWITTER_URL_REGEX.test(url)) {
     return 'twitter';
   }
-  if (/instagram\.com\/(?:p|reel)\/[A-Za-z0-9_-]+/.test(url)) {
+  if (INSTAGRAM_URL_REGEX.test(url)) {
     return 'instagram';
   }
   return null;
+}
+
+/**
+ * Normalize a SocialPost or plain URL string into a resolved SocialPost with a platform.
+ * Returns null if the platform cannot be detected from the URL.
+ */
+export function normalizePost(
+  input: SocialPostInput
+): (SocialPost & { platform: SocialPlatform }) | null {
+  if (typeof input === 'string') {
+    const trimmedUrl = input.trim();
+    const platform = detectPlatform(trimmedUrl);
+    if (!platform) return null;
+    return { platform, url: trimmedUrl };
+  }
+
+  const trimmedUrl = input.url?.trim() ?? '';
+  const platform = input.platform ?? detectPlatform(trimmedUrl);
+  if (!platform) return null;
+
+  return {
+    ...input,
+    url: trimmedUrl,
+    platform,
+  };
+}
+
+/**
+ * Normalize an array of SocialPost objects or plain URL strings, filtering out unsupported URLs.
+ */
+export function normalizePosts(
+  inputs: SocialPostInput[]
+): Array<SocialPost & { platform: SocialPlatform }> {
+  const result: Array<SocialPost & { platform: SocialPlatform }> = [];
+  for (const input of inputs) {
+    const normalized = normalizePost(input);
+    if (normalized) {
+      result.push(normalized);
+    }
+  }
+  return result;
 }
 
 /**
@@ -67,12 +114,14 @@ export function getInstagramEmbedUrl(postId: string): string {
 export function generatePostId(post: SocialPost): string {
   if (post.id) return post.id;
 
-  if (post.platform === 'twitter') {
+  const platform = post.platform ?? detectPlatform(post.url);
+
+  if (platform === 'twitter') {
     const tweetId = extractTweetId(post.url);
     return tweetId ? `tw-${tweetId}` : `tw-${hashString(post.url)}`;
   }
 
-  if (post.platform === 'instagram') {
+  if (platform === 'instagram') {
     const igId = extractInstagramId(post.url);
     return igId ? `ig-${igId}` : `ig-${hashString(post.url)}`;
   }

@@ -3,6 +3,8 @@ import {
   extractTweetId,
   extractInstagramId,
   detectPlatform,
+  normalizePost,
+  normalizePosts,
   generatePostId,
   getColumnCount,
   getTwitterEmbedUrl,
@@ -19,6 +21,11 @@ describe('extractTweetId', () => {
     expect(extractTweetId('https://x.com/user/status/9876543210')).toBe('9876543210');
   });
 
+  it('should support mobile.twitter.com, /i/web/status, and query params', () => {
+    expect(extractTweetId('https://mobile.twitter.com/user/status/111222?s=20')).toBe('111222');
+    expect(extractTweetId('https://x.com/i/web/status/333444')).toBe('333444');
+  });
+
   it('should return null for invalid URLs', () => {
     expect(extractTweetId('https://example.com')).toBeNull();
     expect(extractTweetId('')).toBeNull();
@@ -30,8 +37,11 @@ describe('extractInstagramId', () => {
     expect(extractInstagramId('https://instagram.com/p/ABC123xyz')).toBe('ABC123xyz');
   });
 
-  it('should extract post ID from Instagram reel URL', () => {
+  it('should extract post ID from Instagram reel, reels, tv, and instagr.am URLs', () => {
     expect(extractInstagramId('https://instagram.com/reel/XYZ789abc')).toBe('XYZ789abc');
+    expect(extractInstagramId('https://www.instagram.com/reels/REEL123/')).toBe('REEL123');
+    expect(extractInstagramId('https://www.instagram.com/tv/TV123/')).toBe('TV123');
+    expect(extractInstagramId('https://instagr.am/p/SHORT123/')).toBe('SHORT123');
   });
 
   it('should return null for invalid URLs', () => {
@@ -56,14 +66,54 @@ describe('detectPlatform', () => {
   });
 });
 
+describe('normalizePost & normalizePosts', () => {
+  it('should normalize plain URL strings with auto-detected platform', () => {
+    expect(normalizePost('  https://x.com/user/status/12345  ')).toEqual({
+      platform: 'twitter',
+      url: 'https://x.com/user/status/12345',
+    });
+    expect(normalizePost('https://www.instagram.com/p/ABC123/')).toEqual({
+      platform: 'instagram',
+      url: 'https://www.instagram.com/p/ABC123/',
+    });
+    expect(normalizePost('https://example.com/unknown')).toBeNull();
+  });
+
+  it('should normalize objects with omitted platform and preserve extra fields', () => {
+    expect(
+      normalizePost({
+        id: 'featured',
+        url: 'https://x.com/user/status/999',
+        estimatedHeight: 420,
+      })
+    ).toEqual({
+      id: 'featured',
+      platform: 'twitter',
+      url: 'https://x.com/user/status/999',
+      estimatedHeight: 420,
+    });
+  });
+
+  it('should filter out unsupported URLs in normalizePosts', () => {
+    const normalized = normalizePosts([
+      'https://x.com/user/status/123',
+      'https://invalid.example.com',
+      { url: 'https://www.instagram.com/p/ABC123/' },
+    ]);
+    expect(normalized).toHaveLength(2);
+    expect(normalized[0].platform).toBe('twitter');
+    expect(normalized[1].platform).toBe('instagram');
+  });
+});
+
 describe('generatePostId', () => {
   it('should use provided id if available', () => {
     const post: SocialPost = { id: 'custom-id', platform: 'twitter', url: 'https://x.com/u/status/123' };
     expect(generatePostId(post)).toBe('custom-id');
   });
 
-  it('should generate ID from Twitter URL', () => {
-    const post: SocialPost = { platform: 'twitter', url: 'https://x.com/user/status/123456' };
+  it('should generate ID from Twitter URL (even when platform is omitted)', () => {
+    const post: SocialPost = { url: 'https://x.com/user/status/123456' };
     expect(generatePostId(post)).toBe('tw-123456');
   });
 

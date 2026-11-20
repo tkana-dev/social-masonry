@@ -24,6 +24,7 @@ export type {
 export type {
   // Posts
   SocialPost,
+  SocialPostInput,
   SocialPlatform,
   // Config
   SocialMasonryOptions,
@@ -44,6 +45,8 @@ export {
   extractTweetId,
   extractInstagramId,
   detectPlatform,
+  normalizePost,
+  normalizePosts,
   getTwitterEmbedUrl,
   getInstagramEmbedUrl,
   generatePostId,

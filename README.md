@@ -1,107 +1,142 @@
 <div align="center">
   <h1>Social Masonry</h1>
-  <p><strong>Masonry layout for X (Twitter) and Instagram embeds using official widgets</strong></p>
+  <p><strong>Zero-jank masonry wall for X (Twitter) &amp; Instagram embeds — React &amp; Next.js ready</strong></p>
+  <p>Just pass URLs. No API keys, no horizontal layout jumping while embeds load.</p>
 
   [![npm version](https://img.shields.io/npm/v/social-masonry.svg)](https://www.npmjs.com/package/social-masonry)
   [![bundle size](https://img.shields.io/bundlephobia/minzip/social-masonry)](https://bundlephobia.com/package/social-masonry)
   [![license](https://img.shields.io/npm/l/social-masonry.svg)](https://github.com/tkana-dev/social-masonry/blob/main/LICENSE)
   [![TypeScript](https://img.shields.io/badge/TypeScript-Ready-blue.svg)](https://www.typescriptlang.org/)
 
-  <h3><a href="https://tkana.dev/social-masonry/">View Live Demo</a></h3>
+  <h3><a href="https://tkana.dev/social-masonry/">Try the Interactive Playground →</a></h3>
 </div>
 
 ---
 
-## Features
+## Why Social Masonry?
 
-- **Official Widgets** - Uses Twitter's `widgets.js` and Instagram's `embed.js` for native embeds
-- **Auto-sizing** - Embeds automatically adjust to their content height
-- **Responsive** - Adaptive column layouts that look great on any screen size
-- **Themeable** - Light and dark theme support for Twitter embeds
-- **TypeScript** - Full type safety
-- **React Ready** - First-class React component with ref support
-- **Lightweight** - Minimal bundle size, widgets loaded on-demand
+Building a **Wall of Love**, testimonial showcase, or UGC gallery with official X and Instagram embeds is surprisingly painful:
+
+- Embed iframes load asynchronously at unpredictable heights, causing cards in standard masonry grids to **jump horizontally between columns**.
+- Loading many widgets at once slows down the page and injects duplicate scripts.
+- Deleted posts or ad-blockers leave awkward blank holes.
+
+**Social Masonry solves all of this out of the box:**
+
+- **Zero Horizontal Jumping** — Stable column pinning keeps cards in their assigned column while embeds load; only vertical offsets adjust smoothly.
+- **Just Pass URLs** — Pass plain X and Instagram URL strings and platforms are auto-detected (or pass objects for custom IDs and `estimatedHeight` hints).
+- **Shimmer Skeletons & Fade-in** — Height-matched shimmer placeholders stay visible until iframes are actually rendered, then crossfade cleanly.
+- **Next.js App Router Ready** — Ships with built-in `'use client'` directive and SSR-safe hooks.
+- **Graceful Error Fallbacks** — Unavailable or blocked embeds degrade into a clean clickable link card instead of an empty void.
+- **Lazy Loading** — Optional Intersection Observer deferral for fast initial page loads.
+- **Smooth GPU Transitions** — Interruptible `translate3d` animations on resize/column changes, respecting `prefers-reduced-motion`.
+- **Zero API Keys** — Uses official `widgets.js` and `embed.js` scripts loaded once on-demand.
 
 ## Installation
 
 ```bash
 npm install social-masonry
+# or
+pnpm add social-masonry
+# or
+yarn add social-masonry
 ```
 
 ## Quick Start
 
-### React
+### React & Next.js (App Router)
+
+Just pass an array of X (Twitter) and Instagram URLs:
 
 ```tsx
 import { SocialMasonry } from 'social-masonry/react';
 
-function App() {
-  const posts = [
-    {
-      id: '1',
-      platform: 'twitter',
-      url: 'https://twitter.com/username/status/1234567890',
-    },
-    {
-      id: '2',
-      platform: 'instagram',
-      url: 'https://www.instagram.com/p/ABC123xyz/',
-    },
-  ];
+const posts = [
+  'https://x.com/username/status/1234567890',
+  'https://www.instagram.com/p/ABC123xyz/',
+  'https://www.instagram.com/reel/XYZ789abc/',
+];
 
+export function SocialWall() {
   return (
     <SocialMasonry
       posts={posts}
       columns={[
-        { columns: 4, minWidth: 1536 },
-        { columns: 3, minWidth: 1024 },
+        { columns: 4, minWidth: 1280 },
+        { columns: 3, minWidth: 900 },
         { columns: 2, minWidth: 640 },
         { columns: 1, minWidth: 0 },
       ]}
       gap={16}
-      theme="light"
+      theme="dark"
+      lazyLoad
     />
   );
 }
 ```
 
+You can also pass objects when you want custom IDs, explicit platforms, or `estimatedHeight` hints:
+
+```tsx
+<SocialMasonry
+  posts={[
+    {
+      id: 'hero-tweet',
+      url: 'https://x.com/username/status/1234567890',
+      estimatedHeight: 380,
+    },
+    {
+      platform: 'instagram',
+      url: 'https://www.instagram.com/p/ABC123xyz/',
+    },
+  ]}
+/>
+```
+
 ## API
 
-### SocialMasonry Props
+### `SocialMasonry` Props
 
 | Prop | Type | Default | Description |
 |------|------|---------|-------------|
-| `posts` | `SocialPost[]` | `[]` | Array of posts to display |
-| `columns` | `number \| ColumnConfig[]` | `3` | Number of columns or responsive config |
-| `gap` | `number` | `16` | Gap between items in pixels |
-| `theme` | `'light' \| 'dark'` | `'light'` | Theme for Twitter embeds |
-| `animate` | `boolean` | `true` | Enable/disable layout animations |
-| `animationDuration` | `number` | `300` | Animation duration in milliseconds |
+| `posts` | `SocialPostInput[]` | `[]` | Array of post URLs (`string`) or `SocialPost` objects |
+| `columns` | `number \| ColumnConfig[]` | Responsive (`4/3/2/1`) | Number of columns or responsive breakpoint config |
+| `gap` | `number` | `16` | Gap between cards in pixels |
+| `padding` | `number` | `0` | Horizontal container padding in pixels |
+| `theme` | `'light' \| 'dark'` | `'light'` | Theme for X (Twitter) embeds and skeletons |
+| `twitterHeight` | `number` | `500` | Initial/skeleton height for X embeds (px) |
+| `instagramHeight` | `number` | `600` | Initial/skeleton height for Instagram embeds (px) |
+| `twitterHideCard` | `boolean` | `false` | Hide link preview cards on X embeds |
+| `twitterHideThread` | `boolean` | `true` | Hide parent conversation thread on X embeds |
+| `animate` | `boolean` | `true` | Enable/disable layout transitions |
+| `animationDuration` | `number` | `300` | Transition duration in milliseconds |
 | `animationEasing` | `string` | `'ease-out'` | CSS easing function |
-| `staggerDelay` | `number` | `0` | Delay between each card animation (ms) |
-| `lazyLoad` | `boolean` | `false` | Enable lazy loading of embeds via Intersection Observer |
+| `staggerDelay` | `number` | `0` | Delay between cards on column/width relayouts (ms) |
+| `lazyLoad` | `boolean` | `false` | Defer embed creation until scrolled into view |
 | `lazyLoadRootMargin` | `string` | `'200px 0px'` | Root margin for Intersection Observer |
 | `className` | `string` | - | Custom class for container |
-| `style` | `CSSProperties` | - | Custom styles for container |
-| `onEmbedLoad` | `(post: SocialPost) => void` | - | Called when an embed loads |
-| `onEmbedError` | `(post: SocialPost, error: Error) => void` | - | Called on embed error |
+| `style` | `CSSProperties` | - | Custom inline styles for container |
+| `onLayoutComplete` | `(positions: ItemPosition[]) => void` | - | Called after layout positions recalculate |
+| `onEmbedLoad` | `(post: SocialPost) => void` | - | Called when an embed finishes rendering |
+| `onEmbedError` | `(post: SocialPost, error: Error) => void` | - | Called when an embed fails or times out |
 
-### SocialPost Type
+### Types
 
 ```typescript
-interface SocialPost {
-  id?: string;                         // Optional unique identifier
-  platform: 'twitter' | 'instagram';   // Social platform
-  url: string;                         // Post URL
+export type SocialPlatform = 'twitter' | 'instagram';
+
+export interface SocialPost {
+  id?: string;              // Optional unique identifier (auto-generated from URL)
+  platform?: SocialPlatform; // Auto-detected from URL when omitted
+  url: string;              // Post URL
+  estimatedHeight?: number; // Optional initial height hint in px
 }
-```
 
-### ColumnConfig Type
+export type SocialPostInput = SocialPost | string;
 
-```typescript
-interface ColumnConfig {
+export interface ColumnConfig {
   columns: number;   // Number of columns
-  minWidth: number;  // Minimum container width for this config
+  minWidth: number;  // Minimum container width in px
 }
 ```
 
@@ -109,118 +144,58 @@ interface ColumnConfig {
 
 ```tsx
 import { useRef } from 'react';
-import { SocialMasonry, SocialMasonryRef } from 'social-masonry/react';
+import { SocialMasonry, type SocialMasonryRef } from 'social-masonry/react';
 
 function App() {
   const masonryRef = useRef<SocialMasonryRef>(null);
 
-  const handleAddPost = () => {
-    masonryRef.current?.addPosts([newPost]);
+  const handleLoadMore = () => {
+    masonryRef.current?.addPosts([
+      'https://x.com/username/status/9876543210',
+    ]);
   };
 
-  return (
-    <SocialMasonry
-      ref={masonryRef}
-      posts={posts}
-    />
-  );
+  return <SocialMasonry ref={masonryRef} posts={posts} />;
 }
 ```
 
-Available ref methods:
-
 | Method | Description |
 |--------|-------------|
-| `addPosts(posts)` | Add posts to the end |
-| `setPosts(posts)` | Replace all posts |
+| `addPosts(posts)` | Append posts to the shortest columns without moving existing cards |
+| `setPosts(posts)` | Replace all posts and rebalance columns |
 | `removePost(id)` | Remove a post by ID |
-| `refresh()` | Re-process embeds |
+| `refresh()` | Re-process Instagram embeds |
 
 ## Supported URL Formats
 
-### Twitter/X
-
-- `https://twitter.com/username/status/1234567890`
-- `https://x.com/username/status/1234567890`
-
-### Instagram
-
-- `https://www.instagram.com/p/ABC123xyz/`
-- `https://www.instagram.com/reel/ABC123xyz/`
+- **X (Twitter)**: `x.com/<user>/status/<id>`, `twitter.com/<user>/status/<id>`, `mobile.twitter.com/...`, `x.com/i/web/status/<id>`
+- **Instagram**: `instagram.com/p/<id>/`, `instagram.com/reel/<id>/`, `instagram.com/reels/<id>/`, `instagram.com/tv/<id>/`, `instagr.am/p/<id>/`
 
 ## Utilities
-
-The library exports utility functions for URL parsing:
 
 ```typescript
 import {
   extractTweetId,
   extractInstagramId,
   detectPlatform,
+  normalizePost,
+  normalizePosts,
+  calculateMasonryLayout,
 } from 'social-masonry';
 
-// Extract tweet ID from URL
 extractTweetId('https://x.com/user/status/123456'); // '123456'
-
-// Extract Instagram post ID
-extractInstagramId('https://instagram.com/p/ABC123'); // 'ABC123'
-
-// Detect platform from URL
+extractInstagramId('https://instagram.com/reel/ABC123/'); // 'ABC123'
 detectPlatform('https://x.com/user/status/123'); // 'twitter'
-detectPlatform('https://instagram.com/p/ABC'); // 'instagram'
+normalizePost('https://x.com/user/status/123'); // { platform: 'twitter', url: '...' }
 ```
-
-## Animation
-
-Social Masonry uses FLIP (First, Last, Invert, Play) animation technique for smooth layout transitions when window resizes or column count changes.
-
-### Configuration
-
-```tsx
-<SocialMasonry
-  posts={posts}
-  animate={true}           // Enable animations (default: true)
-  animationDuration={300}  // Duration in ms (default: 300)
-  animationEasing="ease-out"  // CSS easing (default: 'ease-out')
-  staggerDelay={50}        // Delay between cards (default: 0)
-/>
-```
-
-### Accessibility
-
-Animations automatically respect the user's `prefers-reduced-motion` system preference. When this setting is enabled, layout changes happen instantly without animation.
-
-### Disabling Animations
-
-```tsx
-<SocialMasonry posts={posts} animate={false} />
-```
-
-## Lazy Loading
-
-When displaying many embeds, loading all widgets at once can be slow. Enable lazy loading to only create embeds when they scroll into view.
-
-```tsx
-<SocialMasonry
-  posts={posts}
-  lazyLoad={true}              // Enable lazy loading (default: false)
-  lazyLoadRootMargin="200px 0px"  // Start loading 200px before viewport (default)
-/>
-```
-
-- Embeds are created only when they enter the viewport (plus the root margin buffer)
-- Once an embed is created, it stays in the DOM even when scrolled out of view
-- A placeholder matching the embed's default height is shown until the embed loads
-- Fully backward-compatible: disabled by default
 
 ## How It Works
 
-1. **Script Loading**: Twitter's `widgets.js` and Instagram's `embed.js` are loaded on-demand when needed
-2. **Widget Creation**: Official APIs (`twttr.widgets.createTweet` and `instgrm.Embeds.process`) create native embeds
-3. **Masonry Layout**: Posts are distributed across columns using a simple round-robin algorithm
-4. **Auto-sizing**: Each embed automatically sizes to its content - no fixed heights
-5. **FLIP Animation**: Cards smoothly animate to new positions using GPU-accelerated CSS transforms
-6. **Lazy Loading**: When enabled, Intersection Observer defers embed creation until items scroll into view
+1. **Deduplicated Script Loading**: Twitter's `widgets.js` and Instagram's `embed.js` are each loaded at most once on-demand via cached Promises, with batched `instgrm.Embeds.process()` calls.
+2. **Height-Matched Shimmer Skeletons**: Each card locks to its initial/estimated height with a shimmer placeholder until the embed iframe finishes rendering, then crossfades in.
+3. **Stable Column Pinning**: Posts are distributed to the shortest columns on initial layout or when column count changes, then pinned to their column so asynchronous height changes never cause cards to jump horizontally.
+4. **rAF-Batched Height Tracking**: `ResizeObserver` updates are coalesced per animation frame (ignoring `< 2px` jitter) and animated via GPU-accelerated `translate3d` transitions.
+5. **Accessibility**: Animations and shimmer effects automatically disable when `prefers-reduced-motion: reduce` is enabled.
 
 ## Browser Support
 

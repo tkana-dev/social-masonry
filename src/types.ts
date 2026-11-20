@@ -16,11 +16,19 @@ export type SocialPlatform = 'twitter' | 'instagram';
 export interface SocialPost {
   /** Unique identifier (auto-generated from URL if not provided) */
   id?: string;
-  /** Social media platform */
-  platform: SocialPlatform;
+  /** Social media platform (auto-detected from URL if omitted) */
+  platform?: SocialPlatform;
   /** Post URL */
   url: string;
+  /** Optional estimated height in px to minimize vertical shift before embed loads */
+  estimatedHeight?: number;
 }
+
+/**
+ * Accepts either a full/partial SocialPost object or a plain post URL string.
+ * Platform is automatically detected from the URL when omitted.
+ */
+export type SocialPostInput = SocialPost | string;
 
 // ============================================
 // Layout Configuration
@@ -109,8 +117,8 @@ export interface LayoutState {
 // ============================================
 
 export interface SocialMasonryOptions extends MasonryConfig, EmbedConfig, MasonryEvents {
-  /** Posts to display */
-  posts: SocialPost[];
+  /** Posts to display (accepts SocialPost objects or plain URL strings) */
+  posts: SocialPostInput[];
   /** Container element or selector (for vanilla JS) */
   container?: HTMLElement | string;
 }
