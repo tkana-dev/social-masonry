@@ -2,8 +2,10 @@ import { describe, it, expect } from 'vitest';
 import {
   calculateMasonryLayout,
   createLayoutEngine,
+  mergeItemHeights,
   MAX_TWITTER_WIDTH,
   MAX_INSTAGRAM_WIDTH,
+  MIN_VALID_EMBED_HEIGHT,
 } from '../layout-engine';
 import type { SocialPost } from '../types';
 
@@ -219,5 +221,80 @@ describe('LayoutEngine', () => {
       expect(col).toBeGreaterThanOrEqual(0);
       expect(col).toBeLessThan(2);
     }
+  });
+});
+
+describe('mergeItemHeights', () => {
+  it('ignores unrendered iframe heights below MIN_VALID_EMBED_HEIGHT (~1px overlap regression)', () => {
+    const prev = new Map<string, number>();
+    const updates = new Map<string, number>([
+      ['post-0', 1],
+      ['post-1', 2],
+      ['post-2', MIN_VALID_EMBED_HEIGHT - 1],
+    ]);
+
+    const next = mergeItemHeights(prev, updates);
+    expect(next).toBe(prev);
+    expect(next.size).toBe(0);
+
+    // Ensure 1-column mobile (390px) layout never places post-1 at y = 17px
+    const posts = makePosts(3);
+    const layout = calculateMasonryLayout({
+      posts,
+      containerWidth: 390,
+      columnCount: 1,
+      gap: 16,
+      itemHeights: next,
+    });
+    const pos0 = layout.positions.get('post-0')!;
+    const pos1 = layout.positions.get('post-1')!;
+    expect(pos1.y).toBe(pos0.y + pos0.height + 16);
+    expect(pos1.y).toBeGreaterThan(100);
+  });
+
+  it('applies batched height updates reliably when snapshotted before clearing pending map', () => {
+    const pending = new Map<string, number>([
+      ['post-0', 620],
+      ['post-1', 480],
+      ['post-2', 710],
+    ]);
+
+    // Simulate React 18 deferred updater: snapshot & clear pending map before updater runs
+    const snapshot = new Map(pending);
+    pending.clear();
+
+    const prev = new Map<string, number>();
+    const firstPass = mergeItemHeights(prev, snapshot);
+    // StrictMode invokes updaters twice with the same snapshot
+    const secondPass = mergeItemHeights(prev, snapshot);
+
+    expect(firstPass.get('post-0')).toBe(620);
+    expect(firstPass.get('post-1')).toBe(480);
+    expect(firstPass.get('post-2')).toBe(710);
+    expect(secondPass).toEqual(firstPass);
+
+    // Verify 1-column mobile layout stacks with zero overlaps
+    const posts = makePosts(3);
+    const layout = calculateMasonryLayout({
+      posts,
+      containerWidth: 390,
+      columnCount: 1,
+      gap: 16,
+      itemHeights: firstPass,
+    });
+    expect(layout.positions.get('post-0')!.y).toBe(0);
+    expect(layout.positions.get('post-1')!.y).toBe(636);
+    expect(layout.positions.get('post-2')!.y).toBe(1132);
+  });
+
+  it('returns the same Map reference when height deltas are below threshold', () => {
+    const prev = new Map<string, number>([['post-0', 500]]);
+    const jitter = new Map<string, number>([['post-0', 501]]);
+    expect(mergeItemHeights(prev, jitter, 2)).toBe(prev);
+
+    const realChange = new Map<string, number>([['post-0', 502]]);
+    const updated = mergeItemHeights(prev, realChange, 2);
+    expect(updated).not.toBe(prev);
+    expect(updated.get('post-0')).toBe(502);
   });
 });

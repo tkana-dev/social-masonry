@@ -30,7 +30,11 @@ import {
   DEFAULT_TWITTER_HEIGHT,
   DEFAULT_INSTAGRAM_HEIGHT,
 } from '../utils';
-import { calculateMasonryLayout } from '../layout-engine';
+import {
+  calculateMasonryLayout,
+  mergeItemHeights,
+  MIN_VALID_EMBED_HEIGHT,
+} from '../layout-engine';
 
 const useIsomorphicLayoutEffect =
   typeof window !== 'undefined' ? useLayoutEffect : useEffect;
@@ -431,6 +435,8 @@ const EmbedErrorFallback: React.FC<EmbedErrorFallbackProps> = ({
 // Twitter Embed Component
 // ============================================
 
+const TWITTER_TIMEOUT_MS = 10000;
+
 interface TwitterEmbedProps {
   url: string;
   theme?: 'light' | 'dark';
@@ -474,11 +480,14 @@ const TwitterEmbed: React.FC<TwitterEmbedProps> = ({
     const target = status === 'loaded' ? embedRef.current : fallbackRef.current;
     if (!target) return;
 
+    const reportHeight = (height: number) => {
+      if (height < MIN_VALID_EMBED_HEIGHT) return;
+      onHeightChangeRef.current?.(height);
+    };
+
     const measure = () => {
-      const rectHeight = target.getBoundingClientRect().height;
-      if (rectHeight > 0) {
-        onHeightChangeRef.current?.(rectHeight);
-      }
+      const height = target.offsetHeight || target.getBoundingClientRect().height;
+      reportHeight(height);
     };
 
     measure();
@@ -487,10 +496,7 @@ const TwitterEmbed: React.FC<TwitterEmbedProps> = ({
 
     const resizeObserver = new ResizeObserver((entries) => {
       for (const entry of entries) {
-        const height = entry.contentRect.height;
-        if (height > 0) {
-          onHeightChangeRef.current?.(height);
-        }
+        reportHeight(entry.contentRect.height);
       }
     });
 
@@ -503,16 +509,52 @@ const TwitterEmbed: React.FC<TwitterEmbedProps> = ({
     if (!embedContainer) return;
 
     let cancelled = false;
+    let settled = false;
+    let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
+    let mutationObserver: MutationObserver | null = null;
+    let probeResizeObserver: ResizeObserver | null = null;
+
     const widgetContainer = document.createElement('div');
     embedContainer.appendChild(widgetContainer);
     setStatus('loading');
 
+    const cleanupObservers = () => {
+      if (timeoutTimer) {
+        clearTimeout(timeoutTimer);
+        timeoutTimer = null;
+      }
+      mutationObserver?.disconnect();
+      mutationObserver = null;
+      probeResizeObserver?.disconnect();
+      probeResizeObserver = null;
+    };
+
+    const markLoaded = () => {
+      if (cancelled || settled) return;
+      settled = true;
+      cleanupObservers();
+      setStatus('loaded');
+      onLoadRef.current?.();
+    };
+
+    const getRenderedHeight = () =>
+      widgetContainer.offsetHeight || widgetContainer.getBoundingClientRect().height;
+
+    const checkTweetReady = () => {
+      if (cancelled || settled) return;
+      if (getRenderedHeight() >= MIN_VALID_EMBED_HEIGHT) {
+        markLoaded();
+      }
+    };
+
     const tweetId = extractTweetId(url);
     if (!tweetId) {
+      settled = true;
       setStatus('error');
       onErrorRef.current?.(new Error('Invalid Twitter URL'));
       return () => {
         cancelled = true;
+        cleanupObservers();
         if (widgetContainer.parentNode === embedContainer) {
           embedContainer.removeChild(widgetContainer);
         }
@@ -523,6 +565,7 @@ const TwitterEmbed: React.FC<TwitterEmbedProps> = ({
       .then((twttr) => {
         if (cancelled) return;
         if (!twttr.widgets) {
+          settled = true;
           setStatus('error');
           onErrorRef.current?.(new Error('Twitter widgets not loaded'));
           return;
@@ -539,23 +582,62 @@ const TwitterEmbed: React.FC<TwitterEmbedProps> = ({
 
         return twttr.widgets.createTweet(tweetId, widgetContainer, widgetOptions).then((el) => {
           if (cancelled) return;
-          if (el) {
-            setStatus('loaded');
-            onLoadRef.current?.();
-          } else {
+          if (!el) {
+            settled = true;
             setStatus('error');
             onErrorRef.current?.(new Error('Tweet not found or unavailable'));
+            return;
           }
+
+          if (getRenderedHeight() >= MIN_VALID_EMBED_HEIGHT) {
+            markLoaded();
+            return;
+          }
+
+          // Off-screen iframes can resolve createTweet while still ~0-2px tall.
+          // Wait for actual rendered height instead of reporting ~1px to layout.
+          if (typeof MutationObserver !== 'undefined') {
+            mutationObserver = new MutationObserver(checkTweetReady);
+            mutationObserver.observe(widgetContainer, {
+              childList: true,
+              subtree: true,
+              attributes: true,
+              attributeFilter: ['style', 'height', 'class'],
+            });
+          }
+
+          if (typeof ResizeObserver !== 'undefined') {
+            probeResizeObserver = new ResizeObserver(checkTweetReady);
+            probeResizeObserver.observe(widgetContainer);
+          }
+
+          timeoutTimer = setTimeout(() => {
+            if (cancelled || settled) return;
+            if (getRenderedHeight() >= MIN_VALID_EMBED_HEIGHT) {
+              markLoaded();
+              return;
+            }
+            const hasIframe = Boolean(widgetContainer.querySelector('iframe'));
+            setStatus('error');
+            onErrorRef.current?.(new Error('Twitter embed timed out'));
+            if (!hasIframe) {
+              settled = true;
+              cleanupObservers();
+            }
+          }, TWITTER_TIMEOUT_MS);
         });
       })
       .catch((err: unknown) => {
         if (cancelled) return;
+        settled = true;
+        cleanupObservers();
         setStatus('error');
         onErrorRef.current?.(err instanceof Error ? err : new Error(String(err)));
       });
 
     return () => {
       cancelled = true;
+      cleanupObservers();
       if (widgetContainer.parentNode === embedContainer) {
         embedContainer.removeChild(widgetContainer);
       }
@@ -570,7 +652,7 @@ const TwitterEmbed: React.FC<TwitterEmbedProps> = ({
       style={{
         position: 'relative',
         height: isLoading ? defaultHeight : undefined,
-        overflow: isLoading ? 'hidden' : undefined,
+        overflow: isLoading || status === 'error' ? 'hidden' : undefined,
       }}
     >
       {isLoading && (
@@ -596,7 +678,18 @@ const TwitterEmbed: React.FC<TwitterEmbedProps> = ({
         style={{
           opacity: status === 'loaded' ? 1 : 0,
           transition: 'opacity 250ms ease',
-          display: status === 'error' ? 'none' : undefined,
+          ...(status === 'error'
+            ? {
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                width: '100%',
+                pointerEvents: 'none',
+                zIndex: -1,
+              }
+            : {
+                display: 'flow-root',
+              }),
         }}
       />
     </div>
@@ -663,18 +756,25 @@ const InstagramEmbed: React.FC<InstagramEmbedProps> = ({
     if (!target) return;
 
     const reportHeight = (unscaledHeight: number) => {
-      if (unscaledHeight <= 0) return;
+      if (unscaledHeight < MIN_VALID_EMBED_HEIGHT) return;
       if (status === 'loaded') {
+        const scaled = Math.round(unscaledHeight * scale);
+        if (scaled < MIN_VALID_EMBED_HEIGHT) return;
         setRawHeight((prev) =>
           Math.abs(prev - unscaledHeight) >= 1 ? unscaledHeight : prev
         );
-        onHeightChangeRef.current?.(Math.round(unscaledHeight * scale));
+        onHeightChangeRef.current?.(scaled);
       } else {
         onHeightChangeRef.current?.(Math.round(unscaledHeight));
       }
     };
 
-    reportHeight(target.offsetHeight || target.getBoundingClientRect().height);
+    const measuredHeight =
+      target.offsetHeight ||
+      (status === 'loaded' && isScaled && scale > 0
+        ? target.getBoundingClientRect().height / scale
+        : target.getBoundingClientRect().height);
+    reportHeight(measuredHeight);
 
     if (typeof ResizeObserver === 'undefined') return;
 
@@ -686,7 +786,7 @@ const InstagramEmbed: React.FC<InstagramEmbedProps> = ({
 
     resizeObserver.observe(target);
     return () => resizeObserver.disconnect();
-  }, [status, scale]);
+  }, [status, scale, isScaled]);
 
   useEffect(() => {
     const embedContainer = embedRef.current;
@@ -798,13 +898,17 @@ const InstagramEmbed: React.FC<InstagramEmbedProps> = ({
           const iframeHeight = iframe
             ? iframe.offsetHeight || iframe.getBoundingClientRect().height
             : 0;
-          if (iframeHeight > 0) {
+          if (iframeHeight >= INSTAGRAM_MIN_RENDERED_HEIGHT) {
             markLoaded();
           } else {
-            settled = true;
-            cleanupObservers();
+            // Do not mark ~1px unrendered iframes as loaded; show fallback while
+            // keeping observers alive if an iframe exists so late off-screen loads recover.
             setStatus('error');
             onErrorRef.current?.(new Error('Instagram embed timed out'));
+            if (!iframe) {
+              settled = true;
+              cleanupObservers();
+            }
           }
         }, INSTAGRAM_TIMEOUT_MS);
       })
@@ -838,7 +942,7 @@ const InstagramEmbed: React.FC<InstagramEmbedProps> = ({
         position: 'relative',
         width: '100%',
         height: isLoading ? defaultHeight : scaledHeight,
-        overflow: isLoading || isScaled ? 'hidden' : undefined,
+        overflow: isLoading || isScaled || status === 'error' ? 'hidden' : undefined,
         borderRadius: isScaled ? 12 : undefined,
       }}
     >
@@ -865,7 +969,17 @@ const InstagramEmbed: React.FC<InstagramEmbedProps> = ({
         style={{
           opacity: status === 'loaded' ? 1 : 0,
           transition: 'opacity 250ms ease',
-          display: status === 'error' ? 'none' : undefined,
+          ...(status === 'error'
+            ? {
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                pointerEvents: 'none',
+                zIndex: -1,
+              }
+            : {
+                display: 'flow-root',
+              }),
           width: isScaled ? INSTAGRAM_MIN_WIDTH : '100%',
           transform: isScaled ? `scale(${scale})` : undefined,
           transformOrigin: isScaled ? 'top left' : undefined,
@@ -883,13 +997,22 @@ interface LazyEmbedProps {
   children: React.ReactNode;
   rootMargin: string;
   placeholder: React.ReactNode;
+  /** Wait until the card has a computed masonry position before observing intersection */
+  enabled?: boolean;
 }
 
-const LazyEmbed: React.FC<LazyEmbedProps> = ({ children, rootMargin, placeholder }) => {
+const LazyEmbed: React.FC<LazyEmbedProps> = ({
+  children,
+  rootMargin,
+  placeholder,
+  enabled = true,
+}) => {
   const ref = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {
+    if (!enabled || visible) return;
+
     const el = ref.current;
     if (!el) return;
 
@@ -910,7 +1033,7 @@ const LazyEmbed: React.FC<LazyEmbedProps> = ({ children, rootMargin, placeholder
 
     observer.observe(el);
     return () => observer.disconnect();
-  }, [rootMargin]);
+  }, [enabled, rootMargin, visible]);
 
   return <div ref={ref}>{visible ? children : placeholder}</div>;
 };
@@ -975,22 +1098,29 @@ export const SocialMasonry = forwardRef<SocialMasonryRef, SocialMasonryProps>(
     // rAF batching for ResizeObserver height updates
     const pendingHeightsRef = useRef<Map<string, number>>(new Map());
     const rafIdRef = useRef<number | null>(null);
+    const isInitialPostsMountRef = useRef(true);
 
     const onLayoutCompleteRef = useRef(onLayoutComplete);
     useEffect(() => {
       onLayoutCompleteRef.current = onLayoutComplete;
     });
 
-    // Update posts when initialPosts prop changes
+    // Update posts when initialPosts prop changes (skip redundant initial mount update)
     useEffect(() => {
+      if (isInitialPostsMountRef.current) {
+        isInitialPostsMountRef.current = false;
+        return;
+      }
       setPosts(normalizePosts(initialPosts));
     }, [initialPosts]);
 
-    // Track container width and responsive column count
-    useEffect(() => {
+    // Track container width and responsive column count synchronously before paint
+    // so cards receive real masonry coordinates before LazyEmbed observes intersection.
+    useIsomorphicLayoutEffect(() => {
       const updateSize = () => {
         if (!containerRef.current) return;
         const width = containerRef.current.clientWidth;
+        if (width <= 0) return;
         setContainerWidth(width);
         const count = getColumnCount(columns, width);
         setColumnCount(count);
@@ -1081,51 +1211,61 @@ export const SocialMasonry = forwardRef<SocialMasonryRef, SocialMasonryProps>(
       onLayoutCompleteRef.current?.(Array.from(layout.positions.values()));
     }, [layout]);
 
-    // Cancel any queued height rAF on unmount
+    const flushPendingHeights = useCallback(() => {
+      if (pendingHeightsRef.current.size === 0) return;
+
+      // Snapshot and clear BEFORE calling setItemHeights so deferred React 18+
+      // state updaters (and StrictMode double-invocations) never read a cleared Map.
+      const updates = new Map(pendingHeightsRef.current);
+      pendingHeightsRef.current.clear();
+
+      setItemHeights((prev) =>
+        mergeItemHeights(prev, updates, HEIGHT_CHANGE_THRESHOLD, MIN_VALID_EMBED_HEIGHT)
+      );
+    }, []);
+
+    // Cancel any queued height rAF on unmount (and flush queued updates after StrictMode remount)
     useEffect(() => {
+      if (pendingHeightsRef.current.size > 0 && rafIdRef.current === null) {
+        if (typeof requestAnimationFrame === 'undefined') {
+          flushPendingHeights();
+        } else {
+          rafIdRef.current = requestAnimationFrame(() => {
+            rafIdRef.current = null;
+            flushPendingHeights();
+          });
+        }
+      }
       return () => {
         if (rafIdRef.current !== null) {
           cancelAnimationFrame(rafIdRef.current);
           rafIdRef.current = null;
         }
       };
-    }, []);
+    }, [flushPendingHeights]);
 
     // Batched height change handler (coalesces multiple ResizeObserver ticks per frame)
-    const handleHeightChange = useCallback((postId: string, rawHeight: number) => {
-      const height = Math.round(rawHeight);
-      if (height <= 0) return;
+    const handleHeightChange = useCallback(
+      (postId: string, rawHeight: number) => {
+        const height = Math.round(rawHeight);
+        if (height < MIN_VALID_EMBED_HEIGHT) return;
 
-      pendingHeightsRef.current.set(postId, height);
+        pendingHeightsRef.current.set(postId, height);
 
-      if (rafIdRef.current !== null) return;
+        if (rafIdRef.current !== null) return;
 
-      rafIdRef.current = requestAnimationFrame(() => {
-        rafIdRef.current = null;
-        const updates = pendingHeightsRef.current;
-        if (updates.size === 0) return;
+        if (typeof requestAnimationFrame === 'undefined') {
+          flushPendingHeights();
+          return;
+        }
 
-        setItemHeights((prev) => {
-          let changed = false;
-          const next = new Map(prev);
-
-          updates.forEach((nextHeight, id) => {
-            const currentHeight = prev.get(id);
-            if (
-              currentHeight === undefined ||
-              Math.abs(currentHeight - nextHeight) >= HEIGHT_CHANGE_THRESHOLD
-            ) {
-              next.set(id, nextHeight);
-              changed = true;
-            }
-          });
-
-          return changed ? next : prev;
+        rafIdRef.current = requestAnimationFrame(() => {
+          rafIdRef.current = null;
+          flushPendingHeights();
         });
-
-        updates.clear();
-      });
-    }, []);
+      },
+      [flushPendingHeights]
+    );
 
     // Expose imperative methods via ref
     useImperativeHandle(
@@ -1245,16 +1385,24 @@ export const SocialMasonry = forwardRef<SocialMasonryRef, SocialMasonryProps>(
             return null;
           }
 
-          const wrappedContent = lazyLoad ? (
+          const skeleton = (
+            <EmbedSkeleton
+              height={defaultHeight}
+              theme={theme}
+              platform={post.platform}
+            />
+          );
+
+          // Wait until this card has its computed masonry position before mounting
+          // embeds or starting IntersectionObserver, so unpositioned cards stacked at (0, 0)
+          // never trigger all lazy embeds simultaneously.
+          const wrappedContent = !position ? (
+            skeleton
+          ) : lazyLoad ? (
             <LazyEmbed
               rootMargin={lazyLoadRootMargin}
-              placeholder={
-                <EmbedSkeleton
-                  height={defaultHeight}
-                  theme={theme}
-                  platform={post.platform}
-                />
-              }
+              placeholder={skeleton}
+              enabled={true}
             >
               {embedContent}
             </LazyEmbed>

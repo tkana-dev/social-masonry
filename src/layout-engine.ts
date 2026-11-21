@@ -22,6 +22,49 @@ export const MAX_TWITTER_WIDTH = 550;
 export const MAX_INSTAGRAM_WIDTH = 540;
 export const MAX_EMBED_WIDTH = 550;
 
+/**
+ * Minimum height (px) considered a genuinely rendered embed.
+ * Prevents unrendered off-screen iframes (~0-2px) from collapsing card slots
+ * and causing subsequent cards to overlap.
+ */
+export const MIN_VALID_EMBED_HEIGHT = 50;
+
+/**
+ * Merge a batch of measured item heights into the existing height map.
+ * Ignores sub-threshold jitter and implausibly small heights from unrendered iframes.
+ * Returns the original `prev` reference when no meaningful change occurred.
+ */
+export function mergeItemHeights(
+  prev: Map<string, number>,
+  updates: ReadonlyMap<string, number>,
+  threshold = 2,
+  minHeight = MIN_VALID_EMBED_HEIGHT
+): Map<string, number> {
+  if (updates.size === 0) return prev;
+
+  let changed = false;
+  let next: Map<string, number> | null = null;
+
+  updates.forEach((rawHeight, id) => {
+    const nextHeight = Math.round(rawHeight);
+    if (nextHeight < minHeight) return;
+
+    const currentHeight = prev.get(id);
+    if (
+      currentHeight === undefined ||
+      Math.abs(currentHeight - nextHeight) >= threshold
+    ) {
+      if (!next) {
+        next = new Map(prev);
+      }
+      next.set(id, nextHeight);
+      changed = true;
+    }
+  });
+
+  return changed && next ? next : prev;
+}
+
 export interface CalculateLayoutOptions {
   posts: SocialPostInput[];
   containerWidth: number;
